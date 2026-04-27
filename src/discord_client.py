@@ -47,13 +47,13 @@ class DiscordSender:
             # Use shared session for connection pooling
             session = await get_shared_session()
             
-            # Prepare payload
-            payload = {}
+            # Prepare data
+            data = aiohttp.FormData()
+            
             if text:
-                payload['content'] = text
-
+                data.add_field('content', text)
+            
             # Handle file upload
-            files = None
             if media_data:
                 # Check file size
                 if len(media_data) > self.max_file_size_bytes:
@@ -63,27 +63,24 @@ class DiscordSender:
                     )
                     # Send text only if available
                     if text:
-                        response = await session.post(self.webhook_url, json=payload)
+                        response = await session.post(self.webhook_url, data=data)
                         if response.status != 204:
                             logger.error(f'Discord webhook returned status {response.status}')
                             return False
                         await response.release()
                     return False
-
-                # Prepare file for upload
-                files = {
-                    'file': (filename, BytesIO(media_data))
-                }
-
+                
+                # Add file to form data
+                data.add_field(
+                    'file',
+                    media_data,
+                    filename=filename,
+                    content_type='application/octet-stream'
+                )
+            
             # Send request
-            if files:
-                response = await session.post(self.webhook_url, data=payload, files=files)
-                if response.status != 204:
-                    logger.error(f'Discord webhook returned status {response.status}')
-                    return False
-                await response.release()
-            elif payload:
-                response = await session.post(self.webhook_url, json=payload)
+            if len(data._fields) > 0:
+                response = await session.post(self.webhook_url, data=data)
                 if response.status != 204:
                     logger.error(f'Discord webhook returned status {response.status}')
                     return False
