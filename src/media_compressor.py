@@ -209,8 +209,7 @@ class MediaCompressor:
                     audio_bitrate='128k',
                     preset='medium',
                     movflags='faststart',
-                    map='0:v:0',  # First video stream only
-                    map='0:a:0'   # First audio stream only
+                    **{'map': ['0:v:0', '0:a:0']}  # First video and audio streams only
                 )
                 .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
             )
