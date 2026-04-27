@@ -52,6 +52,14 @@ class TestChannelConfig:
         )
         assert config.channel == "-1001234567890"
 
+    def test_channel_with_integer_id(self):
+        """Test channel configuration with integer ID (YAML parsing)."""
+        config = ChannelConfig(
+            channel=-1001234567890,  # Integer (as YAML would parse it)
+            destinations=["discord_main"]
+        )
+        assert config.channel == "-1001234567890"  # Should be converted to string
+
     def test_invalid_username_too_short(self):
         """Test invalid username (too short)."""
         with pytest.raises(ValidationError, match="Invalid channel username"):

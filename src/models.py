@@ -42,17 +42,24 @@ class ChannelConfig(BaseModel):
     destinations: List[str] = Field(..., description="List of destination names")
     settings: Optional[ChannelSettings] = Field(None, description="Channel-specific settings")
 
-    @field_validator('channel')
+    @field_validator('channel', mode='before')
     @classmethod
-    def validate_channel(cls, v: str) -> str:
+    def validate_channel(cls, v):
+        # Convert integer to string if needed
+        if isinstance(v, int):
+            v = str(v)
+        
+        if not isinstance(v, str):
+            raise ValueError(f'Channel must be a string or integer, got {type(v).__name__}')
+        
         if v.startswith('@'):
             if not re.match(r'^@[a-zA-Z0-9_]{5,32}$', v):
                 raise ValueError(f'Invalid channel username: {v}')
         else:
-            try:
-                int(v)
-            except ValueError:
+            # Validate it's a valid numeric ID (can be positive or negative)
+            if not v.lstrip('-').isdigit():
                 raise ValueError(f'Invalid channel ID: {v}')
+        
         return v
 
 
