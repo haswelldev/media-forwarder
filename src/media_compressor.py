@@ -363,7 +363,9 @@ class MediaCompressor:
         if media_type == 'photo':
             return await MediaCompressor.compress_image(media_data, max_size_mb, filename)
         elif media_type == 'video':
-            return await MediaCompressor.compress_video(media_data, max_size_mb, filename)
+            # Video compression disabled for now
+            logger.debug(f"Video compression disabled, skipping compression for {filename}")
+            return None
         else:
             # Document compression not implemented
             # Documents should not be compressed (may become corrupted)

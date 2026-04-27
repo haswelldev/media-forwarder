@@ -132,127 +132,28 @@ class TestCompressImage:
 
 
 class TestCompressVideo:
-    """Test compress_video method."""
+    """Test compress_video method - video compression is disabled."""
     
     @pytest.mark.asyncio
-    async def test_no_compression_needed(self):
-        data = b"small video"
-        result = await MediaCompressor.compress_video(data, 10)  # 10MB limit
-        assert result is None  # Already under limit
-    
-    @pytest.mark.asyncio
-    async def test_source_too_large(self):
-        data = b"x" * (600 * 1024 * 1024)  # 600MB > 500MB limit
+    async def test_compression_disabled(self):
+        """Test that video compression is disabled and returns None."""
+        data = b"x" * (20 * 1024 * 1024)  # 20MB
         result = await MediaCompressor.compress_video(data, 10)
         assert result is None
     
     @pytest.mark.asyncio
-    async def test_ffmpeg_not_available(self):
-        data = b"x" * (20 * 1024 * 1024)  # 20MB
-        
-        with patch('src.media_compressor.subprocess.run', side_effect=FileNotFoundError("ffmpeg not found")):
-            result = await MediaCompressor.compress_video(data, 10)
-            assert result is None
+    async def test_no_compression_needed(self):
+        """Even if under limit, video compression returns None (disabled)."""
+        data = b"small video"
+        result = await MediaCompressor.compress_video(data, 10)  # 10MB limit
+        assert result is None
     
     @pytest.mark.asyncio
-    async def test_compress_video_success(self):
-        data = b"x" * (20 * 1024 * 1024)  # 20MB
-        
-        with patch('src.media_compressor.subprocess.run') as mock_run:
-            mock_run.return_value = Mock(returncode=0)
-            
-            with patch('src.media_compressor.MediaCompressor._get_video_duration', return_value=60.0):
-                # Check if ffmpeg module is available
-                try:
-                    import ffmpeg as ffmpeg_module
-                    has_ffmpeg = True
-                except ImportError:
-                    has_ffmpeg = False
-                
-                if has_ffmpeg:
-                    with patch('src.media_compressor.ffmpeg') as mock_ffmpeg, \
-                         patch('tempfile.NamedTemporaryFile') as mock_temp, \
-                         patch('builtins.open', create=True) as mock_open, \
-                         patch('os.path.exists', return_value=True), \
-                         patch('os.unlink'):
-                        
-                        # Mock temp files
-                        mock_input_temp = Mock()
-                        mock_input_temp.name = '/tmp/input.mp4'
-                        mock_input_temp.__enter__ = Mock(return_value=mock_input_temp)
-                        mock_input_temp.__exit__ = Mock(return_value=False)
-                        
-                        mock_output_temp = Mock()
-                        mock_output_temp.name = '/tmp/output.mp4'
-                        mock_output_temp.__enter__ = Mock(return_value=mock_output_temp)
-                        mock_output_temp.__exit__ = Mock(return_value=False)
-                        
-                        mock_temp.side_effect = [mock_input_temp, mock_output_temp]
-                        
-                        # Mock file reading - return compressed data
-                        mock_file = Mock()
-                        mock_file.read.return_value = b"compressed_data"
-                        mock_open.return_value.__enter__.return_value = mock_file
-                        
-                        # Mock ffmpeg.run() - returns tuple (out, err)
-                        mock_ffmpeg.input.return_value.output.return_value.overwrite_output.return_value.run.return_value = (b'', b'')
-                        
-                        result = await MediaCompressor.compress_video(data, 10)
-                        assert result == b"compressed_data"
-                else:
-                    # ffmpeg module not available, skip test
-                    pytest.skip("ffmpeg-python not installed")
-    
-    @pytest.mark.asyncio
-    async def test_compress_video_ffmpeg_failed(self):
-        data = b"x" * (20 * 1024 * 1024)
-        
-        try:
-            import ffmpeg as ffmpeg_module
-            has_ffmpeg = True
-        except ImportError:
-            has_ffmpeg = False
-        
-        if not has_ffmpeg:
-            pytest.skip("ffmpeg-python not installed")
-        
-        with patch('src.media_compressor.subprocess.run') as mock_run:
-            mock_run.return_value = Mock(returncode=0)
-            
-            with patch('src.media_compressor.MediaCompressor._get_video_duration', return_value=60.0):
-                with patch('src.media_compressor.ffmpeg') as mock_ffmpeg, \
-                     patch('tempfile.NamedTemporaryFile') as mock_temp, \
-                     patch('os.path.exists', return_value=True), \
-                     patch('os.unlink'):
-                    
-                    # Mock temp files
-                    mock_input_temp = Mock()
-                    mock_input_temp.name = '/tmp/input.mp4'
-                    mock_input_temp.__enter__ = Mock(return_value=mock_input_temp)
-                    mock_input_temp.__exit__ = Mock(return_value=False)
-                    
-                    mock_output_temp = Mock()
-                    mock_output_temp.name = '/tmp/output.mp4'
-                    mock_output_temp.__enter__ = Mock(return_value=mock_output_temp)
-                    mock_output_temp.__exit__ = Mock(return_value=False)
-                    
-                    mock_temp.side_effect = [mock_input_temp, mock_output_temp]
-                    
-                    # Mock ffmpeg.run() to raise an exception
-                    mock_ffmpeg.input.return_value.output.return_value.overwrite_output.return_value.run.side_effect = Exception("ffmpeg error")
-                    
-                    result = await MediaCompressor.compress_video(data, 10)
-                    assert result is None
-    
-    @pytest.mark.asyncio
-    async def test_ffmpeg_python_not_available(self):
-        data = b"x" * (20 * 1024 * 1024)
-        
-        with patch('src.media_compressor.subprocess.run') as mock_run:
-            mock_run.return_value = Mock(returncode=0)
-            with patch('builtins.__import__', side_effect=ImportError("No ffmpeg module")):
-                result = await MediaCompressor.compress_video(data, 10)
-                assert result is None
+    async def test_source_too_large(self):
+        """Even if too large, video compression returns None (disabled)."""
+        data = b"x" * (600 * 1024 * 1024)  # 600MB > 500MB limit
+        result = await MediaCompressor.compress_video(data, 10)
+        assert result is None
 
 
 class TestGetVideoDuration:
@@ -302,13 +203,10 @@ class TestCompressMedia:
             mock_compress.assert_called_once_with(b"data", 10, 'test.jpg')
     
     @pytest.mark.asyncio
-    async def test_compress_video(self):
-        with patch.object(MediaCompressor, 'compress_video', new_callable=AsyncMock) as mock_compress:
-            mock_compress.return_value = b"compressed"
-            
-            result = await MediaCompressor.compress_media(b"data", 'video', 10, 'test.mp4')
-            assert result == b"compressed"
-            mock_compress.assert_called_once_with(b"data", 10, 'test.mp4')
+    async def test_compress_video_disabled(self):
+        """Test that video compression is disabled in compress_media."""
+        result = await MediaCompressor.compress_media(b"data", 'video', 10, 'test.mp4')
+        assert result is None
     
     @pytest.mark.asyncio
     async def test_compress_document_not_supported(self):
