@@ -229,22 +229,26 @@ class MediaForwarder:
 
     def _get_channel_config(self, chat: Channel):
         """Get channel configuration for a chat."""
-        if chat.username:
-            channel_identifier = f'@{chat.username}'
-        else:
-            # For channels, construct the full channel ID
-            # The full Telegram channel ID format is -100XXXXXXXXXX
-            # Telethon's chat.id for channels is the numeric part (XXXXXXXXXX)
-            # We need to prepend -100 to match the configuration format
-            bare_id = chat.id
-            channel_identifier = f'-100{bare_id}'
+        # Try multiple identifiers: username, then numeric ID
+        possible_identifiers = []
         
-        logger.debug(f'Looking for config with identifier: {channel_identifier}')
+        if chat.username:
+            possible_identifiers.append(f'@{chat.username}')
+        
+        # For channels, construct the full channel ID
+        # The full Telegram channel ID format is -100XXXXXXXXXX
+        # Telethon's chat.id for channels is the numeric part (XXXXXXXXXX)
+        # We need to prepend -100 to match the configuration format
+        bare_id = chat.id
+        possible_identifiers.append(f'-100{bare_id}')
+        
+        logger.debug(f'Looking for config with identifiers: {possible_identifiers}')
         
         for channel_config in self.config.config.channels:
-            if channel_config.channel == channel_identifier:
+            if channel_config.channel in possible_identifiers:
                 return channel_config
         
+        logger.warning(f'No configuration found for channel: {chat.title or chat.username or chat.id}')
         return None
 
     def _format_message(self, text: str, chat: Channel, message: Message, channel_settings=None) -> str:
