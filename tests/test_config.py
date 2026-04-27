@@ -181,3 +181,62 @@ class TestConfigManager:
         # Subsequent accesses should use cached config
         config2 = manager.config
         assert config is config2
+
+    def test_session_path_creates_directory(self, tmp_path, temp_config_file):
+        """Test that session path creates directory if it doesn't exist."""
+        new_dir = tmp_path / "new_sessions_dir"
+        with patch.object(ConfigManager, 'DEFAULT_SESSION_DIR', new_dir):
+            manager = ConfigManager(config_path=temp_config_file)
+            session_path = manager.telegram_session_path
+            assert new_dir.exists()
+            assert session_path.parent == new_dir
+
+    def test_load_config_overrides_log_level_from_env(self, tmp_path):
+        """Test that LOG_LEVEL env var overrides config file setting."""
+        config_content = """
+channels:
+  - channel: "@test_channel"
+    destinations:
+      - discord_main
+
+discord_webhooks:
+  discord_main:
+    url: "https://discord.com/api/webhooks/123/abc"
+
+settings:
+  max_file_size_mb: 10
+  log_level: INFO
+"""
+        config_file = tmp_path / "channels.yaml"
+        config_file.write_text(config_content)
+
+        with patch.dict(os.environ, {"LOG_LEVEL": "WARNING"}, clear=False):
+            manager = ConfigManager(config_path=config_file)
+            config = manager.load()
+            assert config.settings.log_level == "WARNING"
+
+    def test_load_config_no_env_override(self, tmp_path):
+        """Test that config file log level is kept when no env var set."""
+        config_content = """
+channels:
+  - channel: "@test_channel"
+    destinations:
+      - discord_main
+
+discord_webhooks:
+  discord_main:
+    url: "https://discord.com/api/webhooks/123/abc"
+
+settings:
+  max_file_size_mb: 10
+  log_level: DEBUG
+"""
+        config_file = tmp_path / "channels.yaml"
+        config_file.write_text(config_content)
+
+        with patch.dict(os.environ, {}, clear=False):
+            if "LOG_LEVEL" in os.environ:
+                del os.environ["LOG_LEVEL"]
+            manager = ConfigManager(config_path=config_file)
+            config = manager.load()
+            assert config.settings.log_level == "DEBUG"

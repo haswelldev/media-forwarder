@@ -42,7 +42,8 @@ class MediaCompressor:
         
         # Check if this is an image
         try:
-            Image.open(BytesIO(media_data))
+            img = Image.open(BytesIO(media_data))
+            img.verify()
             return True, "Image compression feasible"
         except Exception:
             # Not an image or unsupported format
@@ -90,7 +91,7 @@ class MediaCompressor:
                 
                 logger.debug(f"Quality {quality}: {compressed_size_mb:.2f}MB (target: {max_size_mb}MB)")
                 
-                if compressed_size_mb <= target_size_mb:
+                if compressed_size_mb <= max_size_mb:
                     # Check if compression ratio is acceptable
                     original_size_mb = len(media_data) / (1024 * 1024)
                     compression_ratio = compressed_size_mb / original_size_mb
