@@ -57,9 +57,15 @@ class TelegramMonitor:
         
         for channel_config in self.config.config.channels:
             try:
+                # Convert channel identifier to proper format
+                channel_id = channel_config.channel
+                if channel_id.lstrip('-').isdigit():
+                    # Numeric channel ID - convert to integer
+                    channel_id = int(channel_id)
+                
                 # Try to resolve the channel
-                entity = await self.client.get_input_entity(channel_config.channel)
-                channels_to_monitor.append(channel_config.channel)
+                entity = await self.client.get_input_entity(channel_id)
+                channels_to_monitor.append(channel_id)
                 logger.info(f'Added channel to monitoring: {channel_config.channel}')
             except Exception as e:
                 logger.warning(
@@ -77,7 +83,7 @@ class TelegramMonitor:
                 f'Inaccessible channels (skipped): {", ".join(inaccessible_channels)}'
             )
         
-        logger.info(f'Successfully monitoring: {", ".join(channels_to_monitor)}')
+        logger.info(f'Successfully monitoring: {", ".join(str(c) for c in channels_to_monitor)}')
         
         # Set up event handler for new messages in monitored channels
         @self.client.on(events.NewMessage(chats=channels_to_monitor))

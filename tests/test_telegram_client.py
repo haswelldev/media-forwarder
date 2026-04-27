@@ -71,7 +71,7 @@ class TestTelegramMonitor:
             
             await monitor.start_monitoring()
             
-            # Verify channel was resolved
+            # Verify channel was resolved (username as string)
             mock_client.get_input_entity.assert_called_once_with("@test_channel")
 
     @pytest.mark.asyncio
@@ -109,9 +109,38 @@ class TestTelegramMonitor:
             
             await monitor.start_monitoring()
             
-            # Verify only accessible channel was added
+            # Verify both channels were tried
             assert mock_client.get_input_entity.call_count == 2
             # Should not raise exception, just log warning
+
+    @pytest.mark.asyncio
+    async def test_start_monitoring_with_numeric_channel_id(self, mock_config_manager):
+        """Test starting monitoring with numeric channel ID."""
+        # Test with numeric channel ID
+        mock_config_manager.config.channels = [
+            Mock(channel="-1001234567890", destinations=["discord_main"])
+        ]
+        
+        with patch('src.telegram_client.TelegramClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value = mock_client
+            mock_entity = Mock()
+            mock_client.get_input_entity = AsyncMock(return_value=mock_entity)
+            
+            # Mock the on() method to return the decorator
+            def mock_on(event):
+                def decorator(func):
+                    return func
+                return decorator
+            mock_client.on = mock_on
+            
+            monitor = TelegramMonitor(mock_config_manager)
+            monitor.client = mock_client
+            
+            await monitor.start_monitoring()
+            
+            # Verify channel was resolved as integer
+            mock_client.get_input_entity.assert_called_once_with(-1001234567890)
 
     @pytest.mark.asyncio
     async def test_start_monitoring_all_inaccessible(self, mock_config_manager):
