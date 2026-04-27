@@ -52,11 +52,32 @@ class TelegramMonitor:
             raise Exception('Telegram client not initialized')
         
         # Get list of channel IDs/username to monitor
-        channels_to_monitor = [
-            channel.channel for channel in self.config.config.channels
-        ]
+        channels_to_monitor = []
+        inaccessible_channels = []
         
-        logger.info(f'Monitoring channels: {", ".join(channels_to_monitor)}')
+        for channel_config in self.config.config.channels:
+            try:
+                # Try to resolve the channel
+                entity = await self.client.get_input_entity(channel_config.channel)
+                channels_to_monitor.append(channel_config.channel)
+                logger.info(f'Added channel to monitoring: {channel_config.channel}')
+            except Exception as e:
+                logger.warning(
+                    f'Cannot access channel {channel_config.channel}: {e}. '
+                    f'Skipping this channel.'
+                )
+                inaccessible_channels.append(channel_config.channel)
+        
+        if not channels_to_monitor:
+            logger.error('No accessible channels to monitor!')
+            return
+        
+        if inaccessible_channels:
+            logger.warning(
+                f'Inaccessible channels (skipped): {", ".join(inaccessible_channels)}'
+            )
+        
+        logger.info(f'Successfully monitoring: {", ".join(channels_to_monitor)}')
         
         # Set up event handler for new messages in monitored channels
         @self.client.on(events.NewMessage(chats=channels_to_monitor))

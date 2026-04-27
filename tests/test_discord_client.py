@@ -1,9 +1,9 @@
 """Unit tests for Discord client."""
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, AsyncMock
+from aiohttp import ClientError
 from src.discord_client import DiscordSender
-from discord.errors import HTTPException
 
 
 class TestDiscordSender:
@@ -30,15 +30,20 @@ class TestDiscordSender:
     @pytest.mark.asyncio
     async def test_send_text_only(self, sender):
         """Test sending text only."""
-        with patch('src.discord_client.discord.Webhook') as mock_webhook_class, \
-             patch('src.discord_client.discord.File') as mock_file_class:
-            mock_webhook = MagicMock()
-            mock_webhook_class.from_url.return_value = mock_webhook
-            
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.status = 204
+        mock_response.release = AsyncMock()
+        mock_session.post.return_value = mock_response
+        
+        with patch.object(sender, '_get_session', return_value=mock_session):
             result = await sender.send_message(text="Test message")
             
             assert result is True
-            mock_webhook.send.assert_called_once_with(content="Test message")
+            mock_session.post.assert_called_once()
+            call_args = mock_session.post.call_args
+            assert call_args[0][0] == "https://discord.com/api/webhooks/123/abc"
+            assert call_args[1]['json'] == {'content': 'Test message'}
 
     @pytest.mark.asyncio
     async def test_send_empty_message(self, sender):
@@ -47,111 +52,125 @@ class TestDiscordSender:
         assert result is False
 
     @pytest.mark.asyncio
-    @patch('src.discord_client.discord.Webhook')
-    @patch('src.discord_client.discord.File')
-    async def test_send_with_valid_media(self, mock_file_class, mock_webhook_class, sender):
+    async def test_send_with_valid_media(self, sender):
         """Test sending message with valid media."""
-        mock_webhook = MagicMock()
-        mock_webhook_class.from_url.return_value = mock_webhook
-        mock_file = MagicMock()
-        mock_file_class.return_value = mock_file
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.status = 204
+        mock_response.release = AsyncMock()
+        mock_session.post.return_value = mock_response
         
-        media_data = b"fake image data" * 1000  # Small enough to pass size check
-        
-        result = await sender.send_message(text="Test", media_data=media_data, filename="test.jpg")
-        
-        assert result is True
-        mock_webhook.send.assert_called_once()
-        args, kwargs = mock_webhook.send.call_args
-        assert 'file' in kwargs
-        assert kwargs['content'] == "Test"
+        with patch.object(sender, '_get_session', return_value=mock_session):
+            media_data = b"fake image data" * 1000  # Small enough to pass size check
+            
+            result = await sender.send_message(text="Test", media_data=media_data, filename="test.jpg")
+            
+            assert result is True
+            mock_session.post.assert_called_once()
+            call_args = mock_session.post.call_args
+            assert 'files' in call_args[1]
 
     @pytest.mark.asyncio
-    @patch('src.discord_client.discord.Webhook')
-    @patch('src.discord_client.discord.File')
-    async def test_send_with_oversized_media(self, mock_file_class, mock_webhook_class, sender):
+    async def test_send_with_oversized_media(self, sender):
         """Test sending message with oversized media."""
-        mock_webhook = MagicMock()
-        mock_webhook_class.from_url.return_value = mock_webhook
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.status = 204
+        mock_response.release = AsyncMock()
+        mock_session.post.return_value = mock_response
         
-        # Create data larger than 10MB
-        media_data = b"x" * (11 * 1024 * 1024)
-        
-        result = await sender.send_message(text="Test", media_data=media_data, filename="test.jpg")
-        
-        assert result is False
-        # Should send text only
-        mock_webhook.send.assert_called_once_with(content="Test")
+        with patch.object(sender, '_get_session', return_value=mock_session):
+            # Create data larger than 10MB
+            media_data = b"x" * (11 * 1024 * 1024)
+            
+            result = await sender.send_message(text="Test", media_data=media_data, filename="test.jpg")
+            
+            assert result is False
+            # Should send text only (called once with text, no files)
+            assert mock_session.post.call_count == 1
+            call_args = mock_session.post.call_args
+            assert 'files' not in call_args[1]
+            assert call_args[1]['json'] == {'content': 'Test'}
 
     @pytest.mark.asyncio
-    @patch('src.discord_client.discord.Webhook')
-    async def test_send_with_oversized_media_no_text(self, mock_webhook_class, sender):
+    async def test_send_with_oversized_media_no_text(self, sender):
         """Test sending oversized media without text."""
-        mock_webhook = MagicMock()
-        mock_webhook_class.from_url.return_value = mock_webhook
-        
-        media_data = b"x" * (11 * 1024 * 1024)
-        
-        result = await sender.send_message(media_data=media_data, filename="test.jpg")
-        
-        assert result is False
-        # Should not send anything
-        mock_webhook.send.assert_not_called()
+        with patch.object(sender, '_get_session', return_value=AsyncMock()):
+            # Create data larger than 10MB
+            media_data = b"x" * (11 * 1024 * 1024)
+            
+            result = await sender.send_message(media_data=media_data, filename="test.jpg")
+            
+            assert result is False
 
     @pytest.mark.asyncio
-    @patch('src.discord_client.discord.Webhook')
-    async def test_discord_http_error(self, mock_webhook_class, sender):
+    async def test_discord_http_error(self, sender):
         """Test handling Discord HTTP error."""
-        mock_webhook = MagicMock()
-        mock_webhook_class.from_url.return_value = mock_webhook
-        mock_webhook.send.side_effect = HTTPException(response=Mock(), message="Rate limited")
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.status = 500
+        mock_response.release = AsyncMock()
+        mock_session.post.return_value = mock_response
         
-        result = await sender.send_message(text="Test message")
-        
-        assert result is False
+        with patch.object(sender, '_get_session', return_value=mock_session):
+            result = await sender.send_message(text="Test message")
+            
+            assert result is False
 
     @pytest.mark.asyncio
-    @patch('src.discord_client.discord.Webhook')
-    async def test_generic_exception(self, mock_webhook_class, sender):
+    async def test_generic_exception(self, sender):
         """Test handling generic exception."""
-        mock_webhook_class.from_url.side_effect = Exception("Connection error")
+        mock_session = AsyncMock()
+        mock_session.post.side_effect = ClientError("Connection error")
         
-        result = await sender.send_message(text="Test message")
-        
-        assert result is False
+        with patch.object(sender, '_get_session', return_value=mock_session):
+            result = await sender.send_message(text="Test message")
+            
+            assert result is False
 
     @pytest.mark.asyncio
-    @patch('src.discord_client.DiscordSender.send_message')
-    async def test_send_photo(self, mock_send_message, sender):
+    async def test_send_photo(self, sender):
         """Test sending photo."""
-        photo_data = b"photo data"
-        mock_send_message.return_value = True
-        
-        result = await sender.send_photo(text="Photo caption", photo_data=photo_data)
-        
-        assert result is True
-        mock_send_message.assert_called_once_with("Photo caption", photo_data, "photo.jpg")
+        with patch.object(sender, 'send_message', new_callable=AsyncMock) as mock_send_message:
+            mock_send_message.return_value = True
+            photo_data = b"photo data"
+            
+            result = await sender.send_photo(text="Photo caption", photo_data=photo_data)
+            
+            assert result is True
+            mock_send_message.assert_called_once_with("Photo caption", photo_data, "photo.jpg")
 
     @pytest.mark.asyncio
-    @patch('src.discord_client.DiscordSender.send_message')
-    async def test_send_video(self, mock_send_message, sender):
+    async def test_send_video(self, sender):
         """Test sending video."""
-        video_data = b"video data"
-        mock_send_message.return_value = True
-        
-        result = await sender.send_video(text="Video caption", video_data=video_data, filename="video.mp4")
-        
-        assert result is True
-        mock_send_message.assert_called_once_with("Video caption", video_data, "video.mp4")
+        with patch.object(sender, 'send_message', new_callable=AsyncMock) as mock_send_message:
+            mock_send_message.return_value = True
+            video_data = b"video data"
+            
+            result = await sender.send_video(text="Video caption", video_data=video_data, filename="video.mp4")
+            
+            assert result is True
+            mock_send_message.assert_called_once_with("Video caption", video_data, "video.mp4")
 
     @pytest.mark.asyncio
-    @patch('src.discord_client.DiscordSender.send_message')
-    async def test_send_document(self, mock_send_message, sender):
+    async def test_send_document(self, sender):
         """Test sending document."""
-        doc_data = b"document data"
-        mock_send_message.return_value = True
+        with patch.object(sender, 'send_message', new_callable=AsyncMock) as mock_send_message:
+            mock_send_message.return_value = True
+            doc_data = b"document data"
+            
+            result = await sender.send_document(text="Document", document_data=doc_data, filename="file.pdf")
+            
+            assert result is True
+            mock_send_message.assert_called_once_with("Document", doc_data, "file.pdf")
+
+    @pytest.mark.asyncio
+    async def test_close_session(self, sender):
+        """Test closing session."""
+        mock_session = AsyncMock()
+        sender.session = mock_session
+        mock_session.closed = False
         
-        result = await sender.send_document(text="Document", document_data=doc_data, filename="file.pdf")
+        await sender.close()
         
-        assert result is True
-        mock_send_message.assert_called_once_with("Document", doc_data, "file.pdf")
+        mock_session.close.assert_called_once()

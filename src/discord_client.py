@@ -1,8 +1,8 @@
 """Discord client for sending messages via webhooks."""
 
 import logging
-from typing import Optional, List
-import discord
+from typing import Optional
+import aiohttp
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,18 @@ class DiscordSender:
         self.webhook_url = webhook_url
         self.max_file_size_mb = max_file_size_mb
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
+        self.session = None
+
+    async def _get_session(self):
+        """Get or create aiohttp session."""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+
+    async def close(self):
+        """Close aiohttp session."""
+        if self.session and not self.session.closed:
+            await self.session.close()
 
     async def send_message(
         self,
@@ -25,20 +37,16 @@ class DiscordSender:
     ) -> bool:
         """Send message to Discord."""
         try:
-            # Create webhook sync adapter (discord.py uses async)
-            webhook = discord.Webhook.from_url(
-                self.webhook_url,
-                adapter=discord.RequestsWebhookAdapter()
-            )
+            session = await self._get_session()
+            
+            # Prepare payload
+            payload = {}
+            if text:
+                payload['content'] = text
 
-            # Send text only
-            if not media_data:
-                if text:
-                    webhook.send(content=text)
-                else:
-                    logger.warning('No content to send')
-                    return False
-            else:
+            # Handle file upload
+            files = None
+            if media_data:
                 # Check file size
                 if len(media_data) > self.max_file_size_bytes:
                     logger.warning(
@@ -47,24 +55,39 @@ class DiscordSender:
                     )
                     # Send text only if available
                     if text:
-                        webhook.send(content=text)
+                        response = await session.post(self.webhook_url, json=payload)
+                        if response.status != 204:
+                            logger.error(f'Discord webhook returned status {response.status}')
+                            return False
+                        await response.release()
                     return False
 
-                # Send with media
-                file = discord.File(
-                    BytesIO(media_data),
-                    filename=filename
-                )
-                
-                if text:
-                    webhook.send(content=text, file=file)
-                else:
-                    webhook.send(file=file)
+                # Prepare file for upload
+                files = {
+                    'file': (filename, BytesIO(media_data))
+                }
 
-            logger.info(f'Message sent to Discord successfully')
+            # Send request
+            if files:
+                response = await session.post(self.webhook_url, data=payload, files=files)
+                if response.status != 204:
+                    logger.error(f'Discord webhook returned status {response.status}')
+                    return False
+                await response.release()
+            elif payload:
+                response = await session.post(self.webhook_url, json=payload)
+                if response.status != 204:
+                    logger.error(f'Discord webhook returned status {response.status}')
+                    return False
+                await response.release()
+            else:
+                logger.warning('No content to send')
+                return False
+
+            logger.info('Message sent to Discord successfully')
             return True
 
-        except discord.errors.HTTPException as e:
+        except aiohttp.ClientError as e:
             logger.error(f'Discord HTTP error: {e}')
             return False
         except Exception as e:
