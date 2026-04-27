@@ -164,82 +164,94 @@ class MediaCompressor:
             return None
         
         try:
+            import tempfile
+            import os
             
             # First, validate the video data is complete and readable
             if not await MediaCompressor._validate_video(media_data, filename):
                 logger.debug(f"Video validation failed for {filename}")
                 return None
             
-            target_size_bytes = max_size_mb * 1024 * 1024
+            # Write video to temporary file for better ffmpeg handling
+            # Using a temp file instead of pipe allows ffmpeg to seek and analyze properly
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_input:
+                temp_input.write(media_data)
+                temp_input_path = temp_input.name
             
-            # Calculate target bitrate (in bits per second)
-            duration = await MediaCompressor._get_video_duration(media_data)
-            if duration is None:
-                logger.debug(f"Could not get video duration for {filename}")
-                return None
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_output:
+                temp_output_path = temp_output.name
             
-            # Target bitrate with 10% overhead for container
-            target_bitrate = int((target_size_bytes * 8) / duration * 0.9)
-            
-            # Ensure minimum bitrate for quality
-            min_bitrate = 500 * 1024  # 500 kbps
-            if target_bitrate < min_bitrate:
-                logger.debug(
-                    f"Target bitrate {target_bitrate/1024:.0f}kbps too low for {filename}, "
-                    f"using minimum {min_bitrate/1024:.0f}kbps"
-                )
-                target_bitrate = min_bitrate
-            
-            logger.debug(
-                f"Compressing {filename}: {current_size_mb:.2f}MB -> {max_size_mb}MB, "
-                f"bitrate: {target_bitrate/1024:.0f}kbps, duration: {duration:.1f}s"
-            )
-            
-            # Build ffmpeg command with better analysis parameters
-            # Add flags to handle partial/corrupted video files better
-            process = (
-                ffmpeg
-                .input('pipe:', analyzeduration='20000000', probesize='100000000')
-                .output(
-                    'pipe:',
-                    format='mp4',
-                    vcodec='libx264',
-                    acodec='aac',
-                    video_bitrate=f'{target_bitrate}',
-                    audio_bitrate='128k',
-                    preset='medium',
-                    movflags='faststart',
-                    fflags='+genpts+discardcorrupt'  # Generate PTS and discard corrupt packets
-                )
-                .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
-            )
-            
-            # Write input and read output with timeout
             try:
-                output, err = process.communicate(input=media_data, timeout=120)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                logger.error(f"ffmpeg timeout while compressing {filename}")
-                return None
+                target_size_bytes = max_size_mb * 1024 * 1024
             
-            if process.returncode != 0:
-                error_output = err.decode('utf-8', errors='ignore')
-                logger.error(f"ffmpeg failed for {filename} (returncode={process.returncode}): {error_output}")
-                return None
-            
-            compressed_size_mb = len(output) / (1024 * 1024)
-            
-            if compressed_size_mb > max_size_mb:
+                # Calculate target bitrate (in bits per second)
+                duration = await MediaCompressor._get_video_duration(media_data)
+                if duration is None:
+                    logger.debug(f"Could not get video duration for {filename}")
+                    return None
+                
+                # Target bitrate with 10% overhead for container
+                target_bitrate = int((target_size_bytes * 8) / duration * 0.9)
+                
+                # Ensure minimum bitrate for quality
+                min_bitrate = 500 * 1024  # 500 kbps
+                if target_bitrate < min_bitrate:
+                    logger.debug(
+                        f"Target bitrate {target_bitrate/1024:.0f}kbps too low for {filename}, "
+                        f"using minimum {min_bitrate/1024:.0f}kbps"
+                    )
+                    target_bitrate = min_bitrate
+                
                 logger.debug(
-                    f"Compressed video {compressed_size_mb:.2f}MB still exceeds limit {max_size_mb}MB"
+                    f"Compressing {filename}: {current_size_mb:.2f}MB -> {max_size_mb}MB, "
+                    f"bitrate: {target_bitrate/1024:.0f}kbps, duration: {duration:.1f}s"
                 )
-                return None
-            
-            logger.info(
-                f"Compressed {filename}: {current_size_mb:.2f}MB -> {compressed_size_mb:.2f}MB"
-            )
-            return output
-            
+                
+                # Build ffmpeg command using temp files instead of pipe
+                # This allows ffmpeg to seek and properly analyze the video
+                (
+                    ffmpeg
+                    .input(temp_input_path, analyzeduration='20000000', probesize='100000000')
+                    .output(
+                        temp_output_path,
+                        vcodec='libx264',
+                        acodec='aac',
+                        video_bitrate=f'{target_bitrate}',
+                        audio_bitrate='128k',
+                        preset='medium',
+                        movflags='faststart',
+                        fflags='+genpts+discardcorrupt'  # Generate PTS and discard corrupt packets
+                    )
+                    .overwrite_output()
+                    .run(capture_stdout=True, capture_stderr=True, timeout=120)
+                )
+                
+                # Read the compressed video from temp file
+                with open(temp_output_path, 'rb') as f:
+                    output = f.read()
+                
+                compressed_size_mb = len(output) / (1024 * 1024)
+                
+                if compressed_size_mb > max_size_mb:
+                    logger.debug(
+                        f"Compressed video {compressed_size_mb:.2f}MB still exceeds limit {max_size_mb}MB"
+                    )
+                    return None
+                
+                logger.info(
+                    f"Compressed {filename}: {current_size_mb:.2f}MB -> {compressed_size_mb:.2f}MB"
+                )
+                return output
+        finally:
+            # Clean up temporary files
+            try:
+                os.unlink(temp_input_path)
+            except (OSError, IOError):
+                pass
+            try:
+                os.unlink(temp_output_path)
+            except (OSError, IOError):
+                pass
         except Exception as e:
             logger.error(f"Error compressing video {filename}: {e}", exc_info=True)
             return None
