@@ -196,10 +196,10 @@ class MediaCompressor:
             )
             
             # Build ffmpeg command with better analysis parameters
-            # Map only video and audio streams, skip attached pictures
+            # Add flags to handle partial/corrupted video files better
             process = (
                 ffmpeg
-                .input('pipe:', analyzeduration='10000000', probesize='50000000')
+                .input('pipe:', analyzeduration='20000000', probesize='100000000', fferr_detect='ignore_err')
                 .output(
                     'pipe:',
                     format='mp4',
@@ -209,7 +209,7 @@ class MediaCompressor:
                     audio_bitrate='128k',
                     preset='medium',
                     movflags='faststart',
-                    **{'map': ['0:v:0', '0:a:0']}  # First video and audio streams only
+                    fflags='+genpts+discardcorrupt'  # Generate PTS and discard corrupt packets
                 )
                 .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
             )
