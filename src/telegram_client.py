@@ -65,8 +65,13 @@ class TelegramMonitor:
                 
                 # Try to resolve the channel
                 entity = await self.client.get_input_entity(channel_id)
-                # Use the original channel_id for events (it's already in correct format)
-                channels_to_monitor.append(channel_id)
+                # Extract the bare channel ID for event filtering
+                # NewMessage events use bare channel IDs, not full IDs with -100 prefix
+                entity_id = getattr(entity, 'channel_id', getattr(entity, 'id', None))
+                if entity_id is None:
+                    logger.error(f'Could not extract ID from entity for {channel_config.channel}')
+                    continue
+                channels_to_monitor.append(entity_id)
                 logger.info(f'Added channel to monitoring: {channel_config.channel}')
             except Exception as e:
                 logger.warning(
