@@ -18,7 +18,7 @@ class TestMediaCompressor:
 
     def test_can_compress_image_too_large(self):
         """Test that very large images cannot be compressed."""
-        huge_image = b'x' * (60 * 1024 * 1024)  # 60MB
+        huge_image = b'x' * (250 * 1024 * 1024)  # 250MB
         can_compress, reason = MediaCompressor.can_compress(huge_image, 25)
         
         assert not can_compress
@@ -81,11 +81,12 @@ class TestMediaCompressor:
 
     @pytest.mark.asyncio
     async def test_compress_media_video(self):
-        """Test that video compression is not implemented."""
+        """Test video compression returns None when ffmpeg unavailable."""
         video_data = b'fake video data' * 1000
         
         result = await MediaCompressor.compress_media(video_data, 'video', 10, 'video.mp4')
         
+        # Returns None when ffmpeg is not available (typical in test env)
         assert result is None
 
     @pytest.mark.asyncio
@@ -117,4 +118,4 @@ class TestMediaCompressor:
         assert MediaCompressor.MAX_QUALITY == 95
         assert MediaCompressor.TARGET_QUALITY == 85
         assert MediaCompressor.MAX_COMPRESSION_RATIO == 0.3
-        assert MediaCompressor.MAX_SOURCE_SIZE_MB == 50
+        assert MediaCompressor.MAX_SOURCE_SIZE_MB == 200

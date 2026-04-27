@@ -106,7 +106,7 @@ class MediaForwarder:
         for destination_name in channel_config.destinations:
             await self._forward_to_destination(
                 message, chat, destination_name,
-                formatted_text, media_data, media_type, filename, has_media, channel_settings
+                text, formatted_text, media_data, media_type, filename, has_media, channel_settings
             )
 
     async def _forward_to_destination(
@@ -114,6 +114,7 @@ class MediaForwarder:
         message: Message,
         chat: Channel,
         destination_name: str,
+        text: str,
         formatted_text: str,
         media_data: bytes,
         media_type: str,

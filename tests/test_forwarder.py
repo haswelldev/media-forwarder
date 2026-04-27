@@ -507,9 +507,11 @@ class TestMediaForwarder:
                 mock_compressor.compress_media = AsyncMock(return_value=None)
                 
                 with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                    # Set up mock sender with methods
                     mock_sender = AsyncMock()
-                    mock_discord_class.return_value = mock_sender
                     mock_sender.send_message = AsyncMock(return_value=True)
+                    mock_sender.send_photo = AsyncMock(return_value=True)
+                    mock_discord_class.return_value = mock_sender
                     
                     forwarder = MediaForwarder(mock_config_manager)
                     await forwarder.handle_message(mock_photo_message, mock_channel)
@@ -517,10 +519,7 @@ class TestMediaForwarder:
                     # Should send text only (media skipped)
                     mock_sender.send_message.assert_called_once()
                     # send_photo should not be called
-                    assert not any(
-                        call[0] == 'send_photo' or 'send_photo' in str(call)
-                        for call in mock_sender.method_calls
-                    )
+                    mock_sender.send_photo.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_different_max_sizes_for_different_destinations(self, mock_config_manager, mock_channel, mock_photo_message):

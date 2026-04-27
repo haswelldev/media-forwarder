@@ -1,5 +1,10 @@
 # Media Forwarder
 
+[![Build Status](https://github.com/haswelldev/media-forwarder/actions/workflows/docker-build.yml/badge.svg)](https://github.com/haswelldev/media-forwarder/actions/workflows/docker-build.yml)
+[![Tests](https://github.com/haswelldev/media-forwarder/actions/workflows/tests.yml/badge.svg)](https://github.com/haswelldev/media-forwarder/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/gh/haswelldev/media-forwarder/branch/main/graph/badge.svg)](https://codecov.io/gh/haswelldev/media-forwarder)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A Dockerized service that monitors Telegram channels and automatically forwards posts (including photos, videos, and documents) to Discord channels via webhooks.
 
 ## Features
@@ -19,6 +24,7 @@ A Dockerized service that monitors Telegram channels and automatically forwards 
 - 🌐 **Auto-translation** - Translate captions to English
 - 🎯 **Per-destination limits** - Different file size limits per Discord server
 - 🗜️ **Smart compression** - Automatically compress oversized images
+- 🎬 **Video compression** - Compress videos using ffmpeg to fit within Discord limits
 
 ## Quick Start
 
@@ -139,25 +145,34 @@ discord_webhooks:
 3. Global default setting
 
 **Media Compression:**
-- Automatically attempts to compress images that exceed the max file size
-- Uses intelligent quality reduction to minimize quality loss
+- Automatically attempts to compress images and videos that exceed the max file size
+- Uses intelligent algorithms to minimize quality loss
 - Only compresses if feasible without significant quality degradation
-- Skips compression for files > 50MB (too large for efficient compression)
-- Currently supports images only (photos)
-- Videos and documents are not compressed (would lose quality/corruption risk)
+- Skips compression for files > 200MB (too large for efficient compression)
+- Supports images (photos) and videos
+- Documents are not compressed (corruption risk)
 
-**Compression Algorithm:**
+**Image Compression Algorithm:**
 1. Checks if file exceeds destination's max file size
-2. Verifies compression is feasible (file < 50MB, is an image)
+2. Verifies compression is feasible (file < 200MB, is an image)
 3. Progressively reduces JPEG quality from 95% to 60%
 4. Accepts compression only if size reduces by at least 30%
 5. Sends compressed image if successful, falls back to text-only if not
 
+**Video Compression Algorithm:**
+1. Checks if file exceeds destination's max file size
+2. Verifies compression is feasible (file < 500MB, is a video)
+3. Uses ffmpeg to compress with H.264 codec and AAC audio
+4. Calculates target bitrate based on desired file size and video duration
+5. Sends compressed video if successful, falls back to text-only if not
+
 **Quality Thresholds:**
-- Maximum quality: 95%
-- Minimum acceptable quality: 60%
+- Maximum JPEG quality: 95%
+- Minimum acceptable JPEG quality: 60%
 - Minimum compression ratio: 30% reduction
-- Maximum source size: 50MB
+- Maximum source size (images): 200MB
+- Maximum source size (videos): 500MB
+- Minimum video bitrate: 500 kbps
 
 ```yaml
 channels:
