@@ -223,7 +223,7 @@ class MediaCompressor:
                         fflags='+genpts+discardcorrupt'  # Generate PTS and discard corrupt packets
                     )
                     .overwrite_output()
-                    .run(capture_stdout=True, capture_stderr=True, timeout=120)
+                    .run(capture_stdout=True, capture_stderr=True)
                 )
                 
                 # Read the compressed video from temp file
