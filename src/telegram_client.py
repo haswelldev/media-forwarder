@@ -65,7 +65,7 @@ class TelegramMonitor:
                 
                 # Try to resolve the channel
                 entity = await self.client.get_input_entity(channel_id)
-                channels_to_monitor.append(channel_id)
+                channels_to_monitor.append(entity.id)
                 logger.info(f'Added channel to monitoring: {channel_config.channel}')
             except Exception as e:
                 logger.warning(
@@ -85,18 +85,28 @@ class TelegramMonitor:
         
         logger.info(f'Successfully monitoring: {", ".join(str(c) for c in channels_to_monitor)}')
         
+        # Store channels for checking forwarded messages
+        self.monitored_channel_ids = set(channels_to_monitor)
+
         # Set up event handler for new messages in monitored channels
         @self.client.on(events.NewMessage(chats=channels_to_monitor))
-        async def handle_new_message(event):
-            """Handle new message event."""
-            # Only process channel posts
+        async def handle_channel_message(event):
+            """Handle new message event from channels."""
+            logger.debug(
+                f'Event triggered: chat={event.chat}, chat_type={type(event.chat).__name__}, '
+                f'chat_id={getattr(event.chat, "id", None)}, '
+                f'message_id={event.message.id}, has_text={bool(event.message.text)}, '
+                f'has_media={bool(event.message.media)}'
+            )
+            
             if not event.chat or not isinstance(event.chat, Channel):
+                logger.debug(f'Filtered out: not a Channel (chat={event.chat})')
                 return
             
             message = event.message
             
-            # Skip messages without any content
             if not message.text and not message.media:
+                logger.debug(f'Filtered out message {message.id}: no text or media')
                 return
             
             logger.info(
@@ -104,10 +114,43 @@ class TelegramMonitor:
                 f'(ID: {message.id})'
             )
             
-            # Call the registered callback
             if self.message_callback:
                 try:
                     await self.message_callback(message, event.chat)
+                except Exception as e:
+                    logger.error(f'Error in message callback: {e}', exc_info=True)
+
+        @self.client.on(events.NewMessage(chats=None))
+        async def handle_private_message(event):
+            """Handle forwarded messages from private chats."""
+            from telethon.tl.types import User
+            
+            if not event.chat or isinstance(event.chat, Channel):
+                return
+            
+            message = event.message
+            
+            if not message.text and not message.media:
+                return
+            
+            if not message.forward or not message.forward.from_:
+                return
+            
+            from_chat = message.forward.from_
+            if not isinstance(from_chat, Channel):
+                return
+            
+            if from_chat.id not in self.monitored_channel_ids:
+                return
+            
+            logger.info(
+                f'New forwarded message from channel {from_chat.title or from_chat.username} '
+                f'(ID: {message.id})'
+            )
+            
+            if self.message_callback:
+                try:
+                    await self.message_callback(message, from_chat)
                 except Exception as e:
                     logger.error(f'Error in message callback: {e}', exc_info=True)
 
