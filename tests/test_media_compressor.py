@@ -170,17 +170,31 @@ class TestCompressVideo:
                     has_ffmpeg = False
                 
                 if has_ffmpeg:
-                    with patch('src.media_compressor.ffmpeg') as mock_ffmpeg:
-                        mock_process = Mock()
-                        mock_process.communicate = Mock(return_value=(b"compressed_data", b""))
-                        mock_process.returncode = 0
+                    with patch('src.media_compressor.ffmpeg') as mock_ffmpeg, \
+                         patch('src.media_compressor.tempfile.NamedTemporaryFile') as mock_temp, \
+                         patch('builtins.open', create=True) as mock_open, \
+                         patch('src.media_compressor.os.unlink'):
                         
-                        mock_output = Mock()
-                        mock_output.run_async = Mock(return_value=mock_process)
+                        # Mock temp files
+                        mock_input_temp = Mock()
+                        mock_input_temp.name = '/tmp/input.mp4'
+                        mock_input_temp.__enter__ = Mock(return_value=mock_input_temp)
+                        mock_input_temp.__exit__ = Mock(return_value=False)
                         
-                        mock_input = Mock()
-                        mock_input.output = Mock(return_value=mock_output)
-                        mock_ffmpeg.input = Mock(return_value=mock_input)
+                        mock_output_temp = Mock()
+                        mock_output_temp.name = '/tmp/output.mp4'
+                        mock_output_temp.__enter__ = Mock(return_value=mock_output_temp)
+                        mock_output_temp.__exit__ = Mock(return_value=False)
+                        
+                        mock_temp.side_effect = [mock_input_temp, mock_output_temp]
+                        
+                        # Mock file reading - return compressed data
+                        mock_file = Mock()
+                        mock_file.read.return_value = b"compressed_data"
+                        mock_open.return_value.__enter__.return_value = mock_file
+                        
+                        # Mock ffmpeg.run()
+                        mock_ffmpeg.input.return_value.output.return_value.overwrite_output.return_value.run.return_value = None
                         
                         result = await MediaCompressor.compress_video(data, 10)
                         assert result == b"compressed_data"
@@ -205,17 +219,25 @@ class TestCompressVideo:
             mock_run.return_value = Mock(returncode=0)
             
             with patch('src.media_compressor.MediaCompressor._get_video_duration', return_value=60.0):
-                with patch('src.media_compressor.ffmpeg') as mock_ffmpeg:
-                    mock_process = Mock()
-                    mock_process.communicate = Mock(return_value=(b"", b"error"))
-                    mock_process.returncode = 1
+                with patch('src.media_compressor.ffmpeg') as mock_ffmpeg, \
+                     patch('src.media_compressor.tempfile.NamedTemporaryFile') as mock_temp, \
+                     patch('src.media_compressor.os.unlink'):
                     
-                    mock_output = Mock()
-                    mock_output.run_async = Mock(return_value=mock_process)
+                    # Mock temp files
+                    mock_input_temp = Mock()
+                    mock_input_temp.name = '/tmp/input.mp4'
+                    mock_input_temp.__enter__ = Mock(return_value=mock_input_temp)
+                    mock_input_temp.__exit__ = Mock(return_value=False)
                     
-                    mock_input = Mock()
-                    mock_input.output = Mock(return_value=mock_output)
-                    mock_ffmpeg.input = Mock(return_value=mock_input)
+                    mock_output_temp = Mock()
+                    mock_output_temp.name = '/tmp/output.mp4'
+                    mock_output_temp.__enter__ = Mock(return_value=mock_output_temp)
+                    mock_output_temp.__exit__ = Mock(return_value=False)
+                    
+                    mock_temp.side_effect = [mock_input_temp, mock_output_temp]
+                    
+                    # Mock ffmpeg.run() to raise an exception
+                    mock_ffmpeg.input.return_value.output.return_value.overwrite_output.return_value.run.side_effect = Exception("ffmpeg error")
                     
                     result = await MediaCompressor.compress_video(data, 10)
                     assert result is None
