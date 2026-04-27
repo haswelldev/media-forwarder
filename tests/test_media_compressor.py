@@ -171,15 +171,12 @@ class TestCompressVideo:
                 
                 if has_ffmpeg:
                     with patch('src.media_compressor.ffmpeg') as mock_ffmpeg:
-                        mock_process = AsyncMock()
-                        mock_process.communicate = AsyncMock(return_value=(b"compressed_data", b""))
+                        mock_process = Mock()
+                        mock_process.communicate = Mock(return_value=(b"compressed_data", b""))
                         mock_process.returncode = 0
                         
-                        mock_stream = Mock()
-                        mock_stream.run_async = Mock(return_value=mock_process)
-                        
                         mock_output = Mock()
-                        mock_output.__getitem__ = Mock(return_value=mock_stream)
+                        mock_output.run_async = Mock(return_value=mock_process)
                         
                         mock_input = Mock()
                         mock_input.output = Mock(return_value=mock_output)
@@ -213,11 +210,8 @@ class TestCompressVideo:
                     mock_process.communicate = Mock(return_value=(b"", b"error"))
                     mock_process.returncode = 1
                     
-                    mock_stream = Mock()
-                    mock_stream.run_async = Mock(return_value=mock_process)
-                    
                     mock_output = Mock()
-                    mock_output.__getitem__ = Mock(return_value=mock_stream)
+                    mock_output.run_async = Mock(return_value=mock_process)
                     
                     mock_input = Mock()
                     mock_input.output = Mock(return_value=mock_output)
