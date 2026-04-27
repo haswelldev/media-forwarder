@@ -175,8 +175,8 @@ class MediaForwarder:
                             f'Could not compress media for {destination_name}, '
                             f'skipping this media'
                         )
-                        # Don't send if we can't include media and there's no text
-                        if not formatted_text:
+                        # Don't send if we can't include media and there's no caption
+                        if not text:
                             logger.info(
                                 f'Skipping message {message.id} - no media (compression failed) and no caption'
                             )
