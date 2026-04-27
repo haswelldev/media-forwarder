@@ -1,7 +1,6 @@
 # Media Forwarder
 
 [![Build Status](https://github.com/haswelldev/media-forwarder/actions/workflows/docker-build.yml/badge.svg)](https://github.com/haswelldev/media-forwarder/actions/workflows/docker-build.yml)
-[![Tests](https://github.com/haswelldev/media-forwarder/actions/workflows/tests.yml/badge.svg)](https://github.com/haswelldev/media-forwarder/actions/workflows/tests.yml)
 [![codecov](https://codecov.io/gh/haswelldev/media-forwarder/branch/main/graph/badge.svg)](https://codecov.io/gh/haswelldev/media-forwarder)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
