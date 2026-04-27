@@ -313,18 +313,22 @@ class TestForwardToDestination:
     async def test_forward_photo(self, forwarder):
         mock_chat = Mock(spec=Channel)
         mock_message = Mock(spec=Message)
+        mock_message.id = 1
         
         with patch('src.forwarder.DiscordSender') as mock_sender_class:
             mock_sender = AsyncMock()
             mock_sender.send_photo = AsyncMock(return_value=True)
             mock_sender_class.return_value = mock_sender
             
+            # Use larger data that passes the size validation (>0.01MB)
+            photo_data = b"x" * (20 * 1024)  # 20KB
+            
             await forwarder._forward_to_destination(
                 mock_message, mock_chat, "discord_main",
-                "Caption", "Formatted: Caption", b"photo_data", "photo", "photo.jpg", True, None
+                "Caption", "Formatted: Caption", photo_data, "photo", "photo.jpg", True, None
             )
             
-            mock_sender.send_photo.assert_called_once_with("Formatted: Caption", b"photo_data")
+            mock_sender.send_photo.assert_called_once_with("Formatted: Caption", photo_data)
     
     @pytest.mark.asyncio
     async def test_forward_media_too_large_with_compression(self, forwarder):

@@ -171,8 +171,8 @@ class TestCompressVideo:
                 
                 if has_ffmpeg:
                     with patch('src.media_compressor.ffmpeg') as mock_ffmpeg:
-                        mock_process = Mock()
-                        mock_process.communicate = Mock(return_value=(b"compressed_data", b""))
+                        mock_process = AsyncMock()
+                        mock_process.communicate = AsyncMock(return_value=(b"compressed_data", b""))
                         mock_process.returncode = 0
                         
                         mock_stream = Mock()
