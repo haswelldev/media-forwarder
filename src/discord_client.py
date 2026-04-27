@@ -47,6 +47,18 @@ class DiscordSender:
             # Use shared session for connection pooling
             session = await get_shared_session()
             
+            # Check media type and log
+            if media_data:
+                file_size_mb = len(media_data) / (1024 * 1024)
+                if filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                    logger.info(f'Sending photo: {filename} ({file_size_mb:.2f}MB)')
+                elif filename.endswith(('.mp4', '.mov', '.avi', '.webm')):
+                    logger.info(f'Sending video: {filename} ({file_size_mb:.2f}MB)')
+                else:
+                    logger.info(f'Sending document: {filename} ({file_size_mb:.2f}MB)')
+            elif text:
+                logger.info('Sending text message')
+            
             # Prepare data
             data = aiohttp.FormData()
             
@@ -64,7 +76,7 @@ class DiscordSender:
                     # Send text only if available
                     if text:
                         response = await session.post(self.webhook_url, data=data)
-                        if response.status != 204:
+                        if response.status not in (200, 204):
                             logger.error(f'Discord webhook returned status {response.status}')
                             return False
                         await response.release()
@@ -81,7 +93,7 @@ class DiscordSender:
             # Send request
             if len(data._fields) > 0:
                 response = await session.post(self.webhook_url, data=data)
-                if response.status != 204:
+                if response.status not in (200, 204):
                     logger.error(f'Discord webhook returned status {response.status}')
                     return False
                 await response.release()
