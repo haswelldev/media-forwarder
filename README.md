@@ -13,6 +13,10 @@ A Dockerized service that monitors Telegram channels and automatically forwards 
 - ⚙️ Simple YAML configuration
 - 📊 Structured logging
 - 💾 Session file persistence
+- 🎨 **Per-channel settings** - Customize behavior per channel
+- 📷 **Media-only mode** - Forward only messages with media
+- 🔇 **Caption removal** - Strip captions from media posts
+- 🌐 **Auto-translation** - Translate captions to English
 
 ## Quick Start
 
@@ -115,6 +119,38 @@ channels:
   # By numeric ID
   - channel: "-1001234567890"
 ```
+
+### Per-Channel Settings
+
+Each channel can have its own settings to override the defaults:
+
+```yaml
+channels:
+  - channel: "@media_channel"
+    destinations:
+      - discord_main
+    settings:
+      # Only forward messages with media
+      media_only: true
+      # Remove captions from media posts
+      remove_captions: false
+      # Translate captions to English
+      translate_captions: true
+      # Custom max file size for this channel
+      max_file_size_mb: 25
+      # Override metadata inclusion
+      include_channel_name: true
+      include_timestamp: true
+```
+
+**Available Channel Settings:**
+
+- `media_only` (bool): Only forward messages with media (photos, videos, documents). Skip text-only posts.
+- `remove_captions` (bool): Remove captions from media posts.
+- `translate_captions` (bool): Automatically translate captions to English.
+- `max_file_size_mb` (int): Override maximum file size for this channel.
+- `include_channel_name` (bool): Override include channel name setting.
+- `include_timestamp` (bool): Override include timestamp setting.
 
 ### Multiple Destinations
 
