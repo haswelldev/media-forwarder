@@ -9,12 +9,20 @@ class DiscordWebhook(BaseModel):
     """Discord webhook configuration."""
     url: str = Field(..., description="Discord webhook URL")
     name: Optional[str] = None
+    max_file_size_mb: Optional[int] = Field(None, description="Override max file size for this destination")
 
     @field_validator('url')
     @classmethod
     def validate_webhook_url(cls, v: str) -> str:
         if not v.startswith('https://discord.com/api/webhooks/') and not v.startswith('https://ptb.discord.com/api/webhooks/'):
             raise ValueError('Invalid Discord webhook URL')
+        return v
+
+    @field_validator('max_file_size_mb')
+    @classmethod
+    def validate_max_file_size(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and (v <= 0 or v > 500):
+            raise ValueError('Max file size must be between 1 and 500 MB')
         return v
 
 

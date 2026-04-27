@@ -364,3 +364,195 @@ class TestMediaForwarder:
                 result = await forwarder._translate_text('Original text')
                 # Should return original text on failure
                 assert result == 'Original text'
+
+    @pytest.mark.asyncio
+    async def test_destination_specific_max_file_size(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test that destination-specific max file size is used."""
+        # Add destination with custom max file size
+        mock_config_manager.config.discord_webhooks['discord_main'] = {
+            'url': 'https://discord.com/api/webhooks/123/abc',
+            'max_file_size_mb': 25
+        }
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            # Make image 15MB (larger than global 10MB but smaller than destination 25MB)
+            mock_telemon_instance.download_media = AsyncMock(
+                return_value=b'x' * (15 * 1024 * 1024)
+            )
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                mock_sender = AsyncMock()
+                mock_discord_class.return_value = mock_sender
+                mock_sender.send_photo.return_value = True
+                
+                forwarder = MediaForwarder(mock_config_manager)
+                await forwarder.handle_message(mock_photo_message, mock_channel)
+                
+                # Should create DiscordSender with destination-specific max file size
+                mock_discord_class.assert_called_once()
+                args, kwargs = mock_discord_class.call_args
+                assert args[1] == 25  # Destination-specific size
+
+    @pytest.mark.asyncio
+    async def test_max_file_size_priority(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test priority: destination > channel > global."""
+        # Set global, channel, and destination sizes
+        mock_config_manager.config.settings.max_file_size_mb = 10  # Global
+        mock_config_manager.config.channels[0].settings = ChannelSettings(max_file_size_mb=20)  # Channel
+        mock_config_manager.config.discord_webhooks['discord_main'] = {
+            'url': 'https://discord.com/api/webhooks/123/abc',
+            'max_file_size_mb': 30  # Destination (should win)
+        }
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            mock_telemon_instance.download_media = AsyncMock(return_value=b'photo data')
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                mock_sender = AsyncMock()
+                mock_discord_class.return_value = mock_sender
+                mock_sender.send_photo.return_value = True
+                
+                forwarder = MediaForwarder(mock_config_manager)
+                await forwarder.handle_message(mock_photo_message, mock_channel)
+                
+                # Should use destination-specific size (30MB)
+                args, kwargs = mock_discord_class.call_args
+                assert args[1] == 30
+
+    @pytest.mark.asyncio
+    async def test_channel_max_file_size_when_destination_not_set(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test channel max file size when destination has no override."""
+        # Set channel size but not destination
+        mock_config_manager.config.settings.max_file_size_mb = 10  # Global
+        mock_config_manager.config.channels[0].settings = ChannelSettings(max_file_size_mb=20)  # Channel
+        # Destination has no max_file_size_mb
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            mock_telemon_instance.download_media = AsyncMock(return_value=b'photo data')
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                mock_sender = AsyncMock()
+                mock_discord_class.return_value = mock_sender
+                mock_sender.send_photo.return_value = True
+                
+                forwarder = MediaForwarder(mock_config_manager)
+                await forwarder.handle_message(mock_photo_message, mock_channel)
+                
+                # Should use channel size (20MB)
+                args, kwargs = mock_discord_class.call_args
+                assert args[1] == 20
+
+    @pytest.mark.asyncio
+    async def test_media_compression_attempted_when_too_large(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test that compression is attempted when media is too large."""
+        # Create large image (30MB)
+        large_image = b'x' * (30 * 1024 * 1024)
+        
+        mock_config_manager.config.discord_webhooks['discord_main'] = {
+            'url': 'https://discord.com/api/webhooks/123/abc',
+            'max_file_size_mb': 25
+        }
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            mock_telemon_instance.download_media = AsyncMock(return_value=large_image)
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.MediaCompressor') as mock_compressor_class:
+                mock_compressor = Mock()
+                mock_compressor_class.return_value = mock_compressor
+                mock_compressor.compress_media = AsyncMock(return_value=b'compressed')
+                
+                with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                    mock_sender = AsyncMock()
+                    mock_discord_class.return_value = mock_sender
+                    mock_sender.send_photo.return_value = True
+                    
+                    forwarder = MediaForwarder(mock_config_manager)
+                    await forwarder.handle_message(mock_photo_message, mock_channel)
+                    
+                    # Compression should have been attempted
+                    mock_compressor.compress_media.assert_called_once()
+                    call_args = mock_compressor.compress_media.call_args
+                    assert call_args[0][0] == large_image
+                    assert call_args[0][1] == 'photo'
+                    assert call_args[0][2] == 25
+
+    @pytest.mark.asyncio
+    async def test_media_skipped_when_compression_fails(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test that media is skipped when compression fails."""
+        # Create large image (30MB)
+        large_image = b'x' * (30 * 1024 * 1024)
+        
+        mock_config_manager.config.discord_webhooks['discord_main'] = {
+            'url': 'https://discord.com/api/webhooks/123/abc',
+            'max_file_size_mb': 25
+        }
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            mock_telemon_instance.download_media = AsyncMock(return_value=large_image)
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.MediaCompressor') as mock_compressor_class:
+                mock_compressor = Mock()
+                mock_compressor_class.return_value = mock_compressor
+                # Compression fails (returns None)
+                mock_compressor.compress_media = AsyncMock(return_value=None)
+                
+                with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                    mock_sender = AsyncMock()
+                    mock_discord_class.return_value = mock_sender
+                    mock_sender.send_message = AsyncMock(return_value=True)
+                    
+                    forwarder = MediaForwarder(mock_config_manager)
+                    await forwarder.handle_message(mock_photo_message, mock_channel)
+                    
+                    # Should send text only (media skipped)
+                    mock_sender.send_message.assert_called_once()
+                    # send_photo should not be called
+                    assert not any(
+                        call[0] == 'send_photo' or 'send_photo' in str(call)
+                        for call in mock_sender.method_calls
+                    )
+
+    @pytest.mark.asyncio
+    async def test_different_max_sizes_for_different_destinations(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test different destinations can have different max file sizes."""
+        # Add second destination with different size
+        mock_config_manager.config.channels[0].destinations = ['discord_main', 'discord_backup']
+        mock_config_manager.config.discord_webhooks['discord_main'] = {
+            'url': 'https://discord.com/api/webhooks/123/abc',
+            'max_file_size_mb': 10
+        }
+        mock_config_manager.config.discord_webhooks['discord_backup'] = {
+            'url': 'https://discord.com/api/webhooks/456/def',
+            'max_file_size_mb': 50
+        }
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            mock_telemon_instance.download_media = AsyncMock(return_value=b'photo data')
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                mock_sender = AsyncMock()
+                mock_sender.send_photo = AsyncMock(return_value=True)
+                mock_discord_class.return_value = mock_sender
+                
+                forwarder = MediaForwarder(mock_config_manager)
+                await forwarder.handle_message(mock_photo_message, mock_channel)
+                
+                # Should have been called twice with different sizes
+                assert mock_discord_class.call_count == 2
+                
+                # Check the sizes used
+                sizes = [call[0][1] for call in mock_discord_class.call_args_list]
+                assert 10 in sizes
+                assert 50 in sizes

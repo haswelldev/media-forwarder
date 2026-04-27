@@ -120,9 +120,29 @@ channels:
   - channel: "-1001234567890"
 ```
 
-### Per-Channel Settings
+### Per-Destination Settings
 
-Each channel can have its own settings to override the defaults:
+Each destination can have its own max file size:
+
+```yaml
+discord_webhooks:
+  discord_main:
+    url: "https://discord.com/api/webhooks/..."
+    max_file_size_mb: 25  # Custom limit for this destination
+```
+
+**Max File Size Priority:**
+1. Destination-specific setting (highest priority)
+2. Channel-specific setting
+3. Global default setting
+
+**Media Compression:**
+- Automatically attempts to compress images that exceed the max file size
+- Uses intelligent quality reduction to minimize quality loss
+- Only compresses if feasible without significant quality degradation
+- Skips compression for files > 50MB (too large for efficient compression)
+- Currently supports images only (photos)
+- Videos and documents are not compressed (would lose quality/corruption risk)
 
 ```yaml
 channels:

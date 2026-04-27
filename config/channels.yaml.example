@@ -49,13 +49,20 @@ channels:
 
 # Discord webhook destinations
 discord_webhooks:
-  # Main Discord channel
+  # Main Discord channel with custom max file size
   discord_main:
     url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL_HERE"
+    max_file_size_mb: 25  # Override max file size for this destination
 
-  # Backup Discord channel (optional)
+  # Backup Discord channel with higher limit (e.g., for Nitro server)
   discord_backup:
     url: "https://discord.com/api/webhooks/YOUR_BACKUP_WEBHOOK_URL_HERE"
+    max_file_size_mb: 500  # Nitro servers support up to 500MB
+
+  # Third destination using default global setting
+  discord_archive:
+    url: "https://discord.com/api/webhooks/YOUR_ARCHIVE_WEBHOOK_URL_HERE"
+    # No max_file_size_mb - will use global default (10MB)
 
 # Default application settings (used if not overridden per channel)
 settings:

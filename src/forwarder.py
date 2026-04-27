@@ -7,6 +7,7 @@ from deep_translator import GoogleTranslator
 from src.config import ConfigManager
 from src.telegram_client import TelegramMonitor
 from src.discord_client import DiscordSender
+from src.media_compressor import MediaCompressor
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class MediaForwarder:
         self.config = config_manager
         self.telegram = TelegramMonitor(config_manager)
         self.translator = GoogleTranslator(source='auto', target='en')
+        self.compressor = MediaCompressor()
 
     async def initialize(self):
         """Initialize forwarder."""
@@ -95,46 +97,105 @@ class MediaForwarder:
         # Format message text
         formatted_text = self._format_message(text, chat, message, channel_settings)
 
-        # Determine max file size
-        if channel_settings and channel_settings.max_file_size_mb:
-            max_file_size = channel_settings.max_file_size_mb
-        else:
-            max_file_size = self.config.config.settings.max_file_size_mb
-
         # Forward to each destination
         for destination_name in channel_config.destinations:
-            try:
-                webhook_url = self.config.get_webhook_url(destination_name)
-                sender = DiscordSender(
-                    webhook_url,
-                    max_file_size
-                )
+            await self._forward_to_destination(
+                message, chat, destination_name,
+                formatted_text, media_data, media_type, filename, has_media, channel_settings
+            )
 
-                # Send based on media type
-                if media_type == 'photo' and media_data:
-                    success = await sender.send_photo(formatted_text, media_data)
-                elif media_type == 'video' and media_data:
-                    success = await sender.send_video(formatted_text, media_data, filename)
-                elif media_type == 'document' and media_data:
-                    success = await sender.send_document(formatted_text, media_data, filename)
-                else:
-                    success = await sender.send_message(formatted_text)
+    async def _forward_to_destination(
+        self,
+        message: Message,
+        chat: Channel,
+        destination_name: str,
+        formatted_text: str,
+        media_data: bytes,
+        media_type: str,
+        filename: str,
+        has_media: bool,
+        channel_settings
+    ):
+        """Forward message to a specific destination."""
+        try:
+            # Get destination config
+            webhook_config = self.config.config.discord_webhooks.get(destination_name)
+            if not webhook_config:
+                logger.error(f'Destination config not found: {destination_name}')
+                return
 
-                if success:
+            # Handle both dict and object formats for webhook_config
+            if isinstance(webhook_config, dict):
+                webhook_url = webhook_config['url']
+                max_file_size = webhook_config.get('max_file_size_mb')
+            else:
+                webhook_url = webhook_config.url
+                max_file_size = webhook_config.max_file_size_mb
+
+            # Determine max file size (destination > channel > global)
+            if max_file_size:
+                pass  # Use destination size
+            elif channel_settings and channel_settings.max_file_size_mb:
+                max_file_size = channel_settings.max_file_size_mb
+            else:
+                max_file_size = self.config.config.settings.max_file_size_mb
+
+            sender = DiscordSender(webhook_url, max_file_size)
+
+            # Process media if present
+            final_media_data = media_data
+            if has_media and media_data:
+                # Check if compression is needed
+                file_size_mb = len(media_data) / (1024 * 1024)
+                if file_size_mb > max_file_size:
                     logger.info(
-                        f'Forwarded message {message.id} from {chat.username or chat.id} '
-                        f'to {destination_name}'
+                        f'Media too large ({file_size_mb:.2f}MB > {max_file_size}MB), '
+                        f'attempting compression for {destination_name}'
                     )
-                else:
-                    logger.warning(
-                        f'Failed to forward message {message.id} to {destination_name}'
+                    
+                    # Try to compress
+                    compressed_data = await self.compressor.compress_media(
+                        media_data, media_type, max_file_size, filename
                     )
+                    
+                    if compressed_data:
+                        final_media_data = compressed_data
+                        logger.info(
+                            f'Successfully compressed media for {destination_name}: '
+                            f'{file_size_mb:.2f}MB -> {len(compressed_data)/(1024*1024):.2f}MB'
+                        )
+                    else:
+                        logger.warning(
+                            f'Could not compress media for {destination_name}, '
+                            f'skipping this media'
+                        )
+                        final_media_data = None
 
-            except Exception as e:
-                logger.error(
-                    f'Error forwarding to {destination_name}: {e}',
-                    exc_info=True
+            # Send based on media type
+            if media_type == 'photo' and final_media_data:
+                success = await sender.send_photo(formatted_text, final_media_data)
+            elif media_type == 'video' and final_media_data:
+                success = await sender.send_video(formatted_text, final_media_data, filename)
+            elif media_type == 'document' and final_media_data:
+                success = await sender.send_document(formatted_text, final_media_data, filename)
+            else:
+                success = await sender.send_message(formatted_text)
+
+            if success:
+                logger.info(
+                    f'Forwarded message {message.id} from {chat.username or chat.id} '
+                    f'to {destination_name}'
                 )
+            else:
+                logger.warning(
+                    f'Failed to forward message {message.id} to {destination_name}'
+                )
+
+        except Exception as e:
+            logger.error(
+                f'Error forwarding to {destination_name}: {e}',
+                exc_info=True
+            )
 
     async def _translate_text(self, text: str) -> str:
         """Translate text to English."""
