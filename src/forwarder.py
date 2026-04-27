@@ -149,8 +149,10 @@ class MediaForwarder:
 
             # Process media if present
             final_media_data = media_data
+            skip_message = False
+            
             if has_media and media_data:
-                # Check if compression is needed
+                # Check if compression is needed and try to compress
                 file_size_mb = len(media_data) / (1024 * 1024)
                 if file_size_mb > max_file_size:
                     logger.info(
@@ -158,7 +160,6 @@ class MediaForwarder:
                         f'attempting compression for {destination_name}'
                     )
                     
-                    # Try to compress
                     compressed_data = await self.compressor.compress_media(
                         media_data, media_type, max_file_size, filename
                     )
@@ -174,7 +175,20 @@ class MediaForwarder:
                             f'Could not compress media for {destination_name}, '
                             f'skipping this media'
                         )
-                        final_media_data = None
+                        # Don't send if we can't include media and there's no text
+                        if not formatted_text:
+                            logger.info(
+                                f'Skipping message {message.id} - no media (compression failed) and no caption'
+                            )
+                            skip_message = True
+                        else:
+                            # If there's text, we'll send text only
+                            final_media_data = None
+            
+            # Skip if there's nothing to send
+            if skip_message or (not final_media_data and not formatted_text):
+                logger.info(f'Skipping message {message.id} - no content to send')
+                return
 
             # Send based on media type
             if media_type == 'photo' and final_media_data:
@@ -183,7 +197,8 @@ class MediaForwarder:
                 success = await sender.send_video(formatted_text, final_media_data, filename)
             elif media_type == 'document' and final_media_data:
                 success = await sender.send_document(formatted_text, final_media_data, filename)
-            else:
+            elif formatted_text:
+                # Only send text if there's text content
                 success = await sender.send_message(formatted_text)
 
             if success:
