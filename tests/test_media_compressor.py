@@ -171,9 +171,9 @@ class TestCompressVideo:
                 
                 if has_ffmpeg:
                     with patch('src.media_compressor.ffmpeg') as mock_ffmpeg, \
-                         patch('src.media_compressor.tempfile.NamedTemporaryFile') as mock_temp, \
+                         patch('tempfile.NamedTemporaryFile') as mock_temp, \
                          patch('builtins.open', create=True) as mock_open, \
-                         patch('src.media_compressor.os.unlink'):
+                         patch('os.unlink'):
                         
                         # Mock temp files
                         mock_input_temp = Mock()
@@ -220,8 +220,8 @@ class TestCompressVideo:
             
             with patch('src.media_compressor.MediaCompressor._get_video_duration', return_value=60.0):
                 with patch('src.media_compressor.ffmpeg') as mock_ffmpeg, \
-                     patch('src.media_compressor.tempfile.NamedTemporaryFile') as mock_temp, \
-                     patch('src.media_compressor.os.unlink'):
+                     patch('tempfile.NamedTemporaryFile') as mock_temp, \
+                     patch('os.unlink'):
                     
                     # Mock temp files
                     mock_input_temp = Mock()
