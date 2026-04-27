@@ -3,15 +3,43 @@
 
 # Telegram channels to monitor
 channels:
-  # Example: Monitor a public channel by username
+  # Example: Monitor a public channel by username with default settings
   - channel: "@example_channel"  # or use numeric ID: -1001234567890
     destinations:
       - discord_main
 
-  # Example: Monitor multiple channels to the same destination
-  - channel: "@another_channel"
+  # Example: Monitor channel with per-channel settings
+  - channel: "@media_channel"
     destinations:
       - discord_main
+    settings:
+      # Only forward messages with media (photos, videos, documents)
+      media_only: true
+      # Remove captions from media posts
+      remove_captions: false
+      # Translate captions to English
+      translate_captions: true
+      # Override max file size for this channel (optional)
+      max_file_size_mb: 25
+      # Override metadata inclusion (optional)
+      include_channel_name: true
+      include_timestamp: true
+
+  # Example: Channel that only forwards media without captions
+  - channel: "@no_captions_channel"
+    destinations:
+      - discord_main
+    settings:
+      media_only: true
+      remove_captions: true
+      translate_captions: false
+
+  # Example: Channel with custom file size limit
+  - channel: "-1001234567890"
+    destinations:
+      - discord_main
+    settings:
+      max_file_size_mb: 50
 
   # Example: Monitor a channel to multiple destinations
   - channel: "@third_channel"
@@ -29,7 +57,7 @@ discord_webhooks:
   discord_backup:
     url: "https://discord.com/api/webhooks/YOUR_BACKUP_WEBHOOK_URL_HERE"
 
-# Application settings
+# Default application settings (used if not overridden per channel)
 settings:
   # Maximum file size in MB to upload to Discord
   # Discord free tier: 25MB, Discord Nitro: 500MB

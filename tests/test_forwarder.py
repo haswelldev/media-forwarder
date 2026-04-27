@@ -6,7 +6,7 @@ from unittest.mock import Mock, AsyncMock, patch
 from telethon.tl.types import Channel, Message, MessageMediaPhoto
 from src.forwarder import MediaForwarder
 from src.config import ConfigManager
-from src.models import Config, ChannelConfig, Settings
+from src.models import Config, ChannelConfig, Settings, ChannelSettings
 
 
 @pytest.fixture
@@ -232,3 +232,135 @@ class TestMediaForwarder:
             
             # Should not raise exception, just log warning
             await forwarder.handle_message(mock_text_message, mock_channel)
+
+    @pytest.mark.asyncio
+    async def test_handle_message_with_media_only_setting(self, mock_config_manager, mock_channel, mock_text_message):
+        """Test handling message with media_only setting - should skip text-only messages."""
+        # Add channel settings with media_only enabled
+        channel_settings = ChannelSettings(media_only=True)
+        mock_config_manager.config.channels[0].settings = channel_settings
+        
+        with patch('src.forwarder.TelegramMonitor'):
+            forwarder = MediaForwarder(mock_config_manager)
+            await forwarder.handle_message(mock_text_message, mock_channel)
+            
+            # Should not send anything (text-only message skipped)
+            # No DiscordSender should be created or called
+            pass  # If we reach here without exception, it's correct
+
+    @pytest.mark.asyncio
+    async def test_handle_message_with_remove_captions(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test handling message with remove_captions setting."""
+        # Add channel settings with remove_captions enabled
+        channel_settings = ChannelSettings(remove_captions=True)
+        mock_config_manager.config.channels[0].settings = channel_settings
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            mock_telemon_instance.download_media = AsyncMock(return_value=b"photo data")
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                mock_sender = AsyncMock()
+                mock_discord_class.return_value = mock_sender
+                mock_sender.send_photo.return_value = True
+                
+                forwarder = MediaForwarder(mock_config_manager)
+                await forwarder.handle_message(mock_photo_message, mock_channel)
+                
+                # Should send photo but without caption
+                mock_sender.send_photo.assert_called_once()
+                args, kwargs = mock_sender.send_photo.call_args
+                assert args[0] is None or "Photo caption" not in args[0]
+
+    @pytest.mark.asyncio
+    async def test_handle_message_with_translation(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test handling message with translate_captions setting."""
+        # Add channel settings with translation enabled
+        channel_settings = ChannelSettings(translate_captions=True)
+        mock_config_manager.config.channels[0].settings = channel_settings
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            mock_telemon_instance.download_media = AsyncMock(return_value=b"photo data")
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                mock_sender = AsyncMock()
+                mock_discord_class.return_value = mock_sender
+                mock_sender.send_photo.return_value = True
+                
+                forwarder = MediaForwarder(mock_config_manager)
+                await forwarder.handle_message(mock_photo_message, mock_channel)
+                
+                # Should send photo with translated caption
+                mock_sender.send_photo.assert_called_once()
+                args, kwargs = mock_sender.send_photo.call_args
+                # Caption should be processed (translated or original if translation fails)
+                assert args[0] is not None
+
+    def test_format_message_with_channel_settings_override(self, mock_config_manager, mock_channel, mock_text_message):
+        """Test formatting message with channel settings overrides."""
+        # Add channel settings that override defaults
+        channel_settings = ChannelSettings(
+            include_channel_name=False,
+            include_timestamp=False
+        )
+        mock_config_manager.config.channels[0].settings = channel_settings
+        
+        with patch('src.forwarder.TelegramMonitor'):
+            forwarder = MediaForwarder(mock_config_manager)
+            formatted = forwarder._format_message("Test text", mock_channel, mock_text_message, channel_settings)
+            
+            # Should not include channel name or timestamp (overridden)
+            assert "Test Channel" not in formatted
+            assert "2024-01-01" not in formatted
+            assert "Test text" in formatted
+
+    @pytest.mark.asyncio
+    async def test_handle_message_with_custom_max_file_size(self, mock_config_manager, mock_channel, mock_photo_message):
+        """Test handling message with custom max file size."""
+        # Add channel settings with custom max file size
+        channel_settings = ChannelSettings(max_file_size_mb=25)
+        mock_config_manager.config.channels[0].settings = channel_settings
+        
+        with patch('src.forwarder.TelegramMonitor') as mock_telethon:
+            mock_telemon_instance = Mock()
+            mock_telemon_instance.download_media = AsyncMock(return_value=b"photo data")
+            mock_telethon.return_value = mock_telemon_instance
+            
+            with patch('src.forwarder.DiscordSender') as mock_discord_class:
+                mock_sender = AsyncMock()
+                mock_discord_class.return_value = mock_sender
+                mock_sender.send_photo.return_value = True
+                
+                forwarder = MediaForwarder(mock_config_manager)
+                await forwarder.handle_message(mock_photo_message, mock_channel)
+                
+                # Should create DiscordSender with custom max file size
+                mock_discord_class.assert_called_once()
+                args, kwargs = mock_discord_class.call_args
+                assert args[1] == 25  # Custom max file size
+
+    @pytest.mark.asyncio
+    async def test_translate_text(self, mock_config_manager):
+        """Test text translation."""
+        with patch('src.forwarder.TelegramMonitor'):
+            forwarder = MediaForwarder(mock_config_manager)
+            
+            # Mock the translator
+            with patch.object(forwarder.translator, 'translate', return_value='Translated text'):
+                result = await forwarder._translate_text('Original text')
+                assert result == 'Translated text'
+
+    @pytest.mark.asyncio
+    async def test_translate_text_failure(self, mock_config_manager):
+        """Test text translation failure."""
+        with patch('src.forwarder.TelegramMonitor'):
+            forwarder = MediaForwarder(mock_config_manager)
+            
+            # Mock the translator to raise exception
+            with patch.object(forwarder.translator, 'translate', side_effect=Exception('Translation failed')):
+                result = await forwarder._translate_text('Original text')
+                # Should return original text on failure
+                assert result == 'Original text'

@@ -18,10 +18,21 @@ class DiscordWebhook(BaseModel):
         return v
 
 
+class ChannelSettings(BaseModel):
+    """Per-channel settings."""
+    media_only: bool = Field(False, description="Only forward messages with media, skip text-only posts")
+    remove_captions: bool = Field(False, description="Remove captions from media posts")
+    translate_captions: bool = Field(False, description="Translate captions to English")
+    max_file_size_mb: Optional[int] = Field(None, description="Override max file size for this channel")
+    include_channel_name: Optional[bool] = Field(None, description="Override include channel name")
+    include_timestamp: Optional[bool] = Field(None, description="Override include timestamp")
+
+
 class ChannelConfig(BaseModel):
     """Channel monitoring configuration."""
     channel: str = Field(..., description="Channel username or ID (e.g., @channel_name or -1001234567890)")
     destinations: List[str] = Field(..., description="List of destination names")
+    settings: Optional[ChannelSettings] = Field(None, description="Channel-specific settings")
 
     @field_validator('channel')
     @classmethod
@@ -38,7 +49,7 @@ class ChannelConfig(BaseModel):
 
 
 class Settings(BaseModel):
-    """Application settings."""
+    """Default application settings."""
     max_file_size_mb: int = Field(10, description="Maximum file size in MB to upload to Discord")
     log_level: str = Field("INFO", description="Logging level")
     include_channel_name: bool = Field(True, description="Include channel name in forwarded message")
