@@ -127,7 +127,7 @@ class MediaForwarder:
 
         # Add timestamp if enabled
         if self.config.config.settings.include_timestamp:
-            timestamp = datetime.fromtimestamp(message.date).strftime('%Y-%m-%d %H:%M:%S')
+            timestamp = message.date.strftime('%Y-%m-%d %H:%M:%S')
             parts.append(f'**Time:** {timestamp}')
 
         # Add message text

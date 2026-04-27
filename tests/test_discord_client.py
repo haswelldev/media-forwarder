@@ -30,7 +30,8 @@ class TestDiscordSender:
     @pytest.mark.asyncio
     async def test_send_text_only(self, sender):
         """Test sending text only."""
-        with patch('src.discord_client.discord.Webhook') as mock_webhook_class:
+        with patch('src.discord_client.discord.Webhook') as mock_webhook_class, \
+             patch('src.discord_client.discord.File') as mock_file_class:
             mock_webhook = MagicMock()
             mock_webhook_class.from_url.return_value = mock_webhook
             
@@ -47,10 +48,13 @@ class TestDiscordSender:
 
     @pytest.mark.asyncio
     @patch('src.discord_client.discord.Webhook')
-    async def test_send_with_valid_media(self, mock_webhook_class, sender):
+    @patch('src.discord_client.discord.File')
+    async def test_send_with_valid_media(self, mock_file_class, mock_webhook_class, sender):
         """Test sending message with valid media."""
         mock_webhook = MagicMock()
         mock_webhook_class.from_url.return_value = mock_webhook
+        mock_file = MagicMock()
+        mock_file_class.return_value = mock_file
         
         media_data = b"fake image data" * 1000  # Small enough to pass size check
         
@@ -64,7 +68,8 @@ class TestDiscordSender:
 
     @pytest.mark.asyncio
     @patch('src.discord_client.discord.Webhook')
-    async def test_send_with_oversized_media(self, mock_webhook_class, sender):
+    @patch('src.discord_client.discord.File')
+    async def test_send_with_oversized_media(self, mock_file_class, mock_webhook_class, sender):
         """Test sending message with oversized media."""
         mock_webhook = MagicMock()
         mock_webhook_class.from_url.return_value = mock_webhook
