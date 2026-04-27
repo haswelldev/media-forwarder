@@ -207,28 +207,53 @@ class MediaCompressor:
                     f"bitrate: {target_bitrate/1024:.0f}kbps, duration: {duration:.1f}s"
                 )
                 
+                logger.debug(f"Starting ffmpeg compression for {filename}")
+                
                 # Build ffmpeg command using temp files instead of pipe
                 # This allows ffmpeg to seek and properly analyze the video
-                (
-                    ffmpeg
-                    .input(temp_input_path, analyzeduration='20000000', probesize='100000000')
-                    .output(
-                        temp_output_path,
-                        vcodec='libx264',
-                        acodec='aac',
-                        video_bitrate=f'{target_bitrate}',
-                        audio_bitrate='128k',
-                        preset='medium',
-                        movflags='faststart',
-                        fflags='+genpts+discardcorrupt'  # Generate PTS and discard corrupt packets
+                try:
+                    out, err = (
+                        ffmpeg
+                        .input(temp_input_path, analyzeduration='20000000', probesize='100000000')
+                        .output(
+                            temp_output_path,
+                            vcodec='libx264',
+                            acodec='aac',
+                            video_bitrate=f'{target_bitrate}',
+                            audio_bitrate='128k',
+                            preset='medium',
+                            movflags='faststart',
+                            fflags='+genpts+discardcorrupt'  # Generate PTS and discard corrupt packets
+                        )
+                        .overwrite_output()
+                        .run(capture_stdout=True, capture_stderr=True)
                     )
-                    .overwrite_output()
-                    .run(capture_stdout=True, capture_stderr=True)
-                )
+                    
+                    logger.debug(f"ffmpeg compression completed for {filename}")
+                    
+                    # Log ffmpeg output for debugging
+                    if err:
+                        logger.debug(f"ffmpeg stderr: {err.decode('utf-8', errors='ignore')[:500]}")
+                    
+                    # Check if output file was created
+                    if not os.path.exists(temp_output_path):
+                        logger.error(f"ffmpeg did not create output file for {filename}")
+                        return None
+                except ffmpeg.Error as e:
+                    logger.error(f"ffmpeg error for {filename}: {e.stderr.decode('utf-8', errors='ignore')}")
+                    return None
+                except Exception as e:
+                    logger.error(f"Unexpected error during ffmpeg compression for {filename}: {e}", exc_info=True)
+                    return None
                 
                 # Read the compressed video from temp file
-                with open(temp_output_path, 'rb') as f:
-                    output = f.read()
+                try:
+                    with open(temp_output_path, 'rb') as f:
+                        output = f.read()
+                    logger.debug(f"Read {len(output)} bytes from output file for {filename}")
+                except Exception as e:
+                    logger.error(f"Failed to read output file for {filename}: {e}", exc_info=True)
+                    return None
                 
                 compressed_size_mb = len(output) / (1024 * 1024)
                 
