@@ -199,7 +199,7 @@ class MediaCompressor:
             # Add flags to handle partial/corrupted video files better
             process = (
                 ffmpeg
-                .input('pipe:', analyzeduration='20000000', probesize='100000000', fferr_detect='ignore_err')
+                .input('pipe:', analyzeduration='20000000', probesize='100000000')
                 .output(
                     'pipe:',
                     format='mp4',
