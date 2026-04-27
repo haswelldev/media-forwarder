@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   media-forwarder:
-    image: ghcr.io/haswelldev/media-forwarder:latest
+    image: ghcr.io/haswelldev/media-forwarder:main
     container_name: media-forwarder
     env_file:
       - .env

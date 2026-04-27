@@ -71,7 +71,7 @@ settings:
 Run the login command (interactive):
 
 ```bash
-docker-compose run --rm media-forwarder python -m src.main login
+docker compose run --rm media-forwarder python -m src.main login
 ```
 
 Follow the prompts:
@@ -86,19 +86,19 @@ The session file will be saved to `./sessions/media_forwarder.session`
 Check your configuration:
 
 ```bash
-docker-compose run --rm media-forwarder python -m src.main validate
+docker compose run --rm media-forwarder python -m src.main validate
 ```
 
 ### 5. Start the Service
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ### 6. View Logs
 
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ## Configuration
@@ -153,7 +153,7 @@ settings:
 Perform interactive login to Telegram:
 
 ```bash
-docker-compose run --rm media-forwarder python -m src.main login
+docker compose run --rm media-forwarder python -m src.main login
 ```
 
 ### Run
@@ -161,7 +161,7 @@ docker-compose run --rm media-forwarder python -m src.main login
 Start the forwarder:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Validate
@@ -169,7 +169,7 @@ docker-compose up -d
 Validate configuration:
 
 ```bash
-docker-compose run --rm media-forwarder python -m src.main validate
+docker compose run --rm media-forwarder python -m src.main validate
 ```
 
 ### Stop
@@ -177,7 +177,7 @@ docker-compose run --rm media-forwarder python -m src.main validate
 Stop the service:
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ## File Size Limits
@@ -201,7 +201,7 @@ To re-login, delete the session file and run the login command again:
 
 ```bash
 rm ./sessions/media_forwarder.session
-docker-compose run --rm media-forwarder python -m src.main login
+docker compose run --rm media-forwarder python -m src.main login
 ```
 
 ## Troubleshooting
@@ -213,7 +213,7 @@ docker-compose run --rm media-forwarder python -m src.main login
 **Solution**: Run the login command to create a new session
 
 ```bash
-docker-compose run --rm media-forwarder python -m src.main login
+docker compose run --rm media-forwarder python -m src.main login
 ```
 
 ### Channel Not Found
@@ -261,12 +261,55 @@ docker run --rm \
   media-forwarder
 ```
 
+## Development
+
+### Running Tests
+
+Run the test suite:
+
+```bash
+docker compose run --rm media-forwarder pytest tests/ -v
+```
+
+Run tests with coverage:
+
+```bash
+docker compose run --rm media-forwarder pytest tests/ -v --cov=src --cov-report=html
+```
+
+### Building Locally
+
+```bash
+docker build -t media-forwarder .
+```
+
+### Running Locally
+
+```bash
+docker run --rm \
+  -v $(pwd)/sessions:/app/sessions \
+  -v $(pwd)/config:/app/config \
+  --env-file .env \
+  media-forwarder
+```
+
+## CI/CD
+
+This project uses GitHub Actions for:
+
+- **Automated Testing**: Runs tests on every push and pull request
+- **Docker Image Building**: Builds and pushes Docker images to GitHub Container Registry
+- **Coverage Reporting**: Uploads coverage reports to Codecov
+
+The Docker image is available at: `ghcr.io/haswelldev/media-forwarder:main`
+
 ## Architecture
 
 - **Telegram Client**: Telethon (MTProto library for user accounts)
 - **Discord Client**: discord.py (webhook-based)
 - **Configuration**: YAML with Pydantic validation
 - **Container**: Multi-stage Docker build with Python 3.11-slim
+- **Testing**: pytest with asyncio support and coverage reporting
 
 ## Security
 
