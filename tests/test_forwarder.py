@@ -6,7 +6,7 @@ from unittest.mock import Mock, AsyncMock, patch
 from telethon.tl.types import Channel, Message, MessageMediaPhoto
 from src.forwarder import MediaForwarder
 from src.config import ConfigManager
-from src.models import Config
+from src.models import Config, ChannelConfig, Settings
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def mock_config():
     """Create a mock configuration."""
     return Config(
         channels=[
-            Mock(
+            ChannelConfig(
                 channel="@test_channel",
                 destinations=["discord_main"]
             )
@@ -24,7 +24,7 @@ def mock_config():
                 "url": "https://discord.com/api/webhooks/123/abc"
             }
         },
-        settings=Mock(
+        settings=Settings(
             max_file_size_mb=10,
             log_level="INFO",
             include_channel_name=True,

@@ -97,10 +97,12 @@ class TestConfigManager:
 
     def test_telegram_session_path(self, temp_config_file):
         """Test session file path."""
-        manager = ConfigManager(config_path=temp_config_file)
-        session_path = manager.telegram_session_path
-        assert session_path.name == "media_forwarder.session"
-        assert "sessions" in str(session_path)
+        # Mock the DEFAULT_SESSION_DIR to avoid permission errors in CI
+        with patch.object(ConfigManager, 'DEFAULT_SESSION_DIR', temp_config_file.parent):
+            manager = ConfigManager(config_path=temp_config_file)
+            session_path = manager.telegram_session_path
+            assert session_path.name == "media_forwarder.session"
+            assert "media_forwarder.session" in str(session_path)
 
     def test_log_level_from_env(self, mock_env_vars, temp_config_file):
         """Test log level from environment variable."""

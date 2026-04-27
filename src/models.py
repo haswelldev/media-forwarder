@@ -1,7 +1,7 @@
 """Data models for media-forwarder."""
 
 from typing import List, Optional
-from pydantic import BaseModel, Field, HttpUrl, validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 import re
 
 
@@ -10,8 +10,9 @@ class DiscordWebhook(BaseModel):
     url: str = Field(..., description="Discord webhook URL")
     name: Optional[str] = None
 
-    @validator('url')
-    def validate_webhook_url(cls, v):
+    @field_validator('url')
+    @classmethod
+    def validate_webhook_url(cls, v: str) -> str:
         if not v.startswith('https://discord.com/api/webhooks/') and not v.startswith('https://ptb.discord.com/api/webhooks/'):
             raise ValueError('Invalid Discord webhook URL')
         return v
@@ -22,8 +23,9 @@ class ChannelConfig(BaseModel):
     channel: str = Field(..., description="Channel username or ID (e.g., @channel_name or -1001234567890)")
     destinations: List[str] = Field(..., description="List of destination names")
 
-    @validator('channel')
-    def validate_channel(cls, v):
+    @field_validator('channel')
+    @classmethod
+    def validate_channel(cls, v: str) -> str:
         if v.startswith('@'):
             if not re.match(r'^@[a-zA-Z0-9_]{5,32}$', v):
                 raise ValueError(f'Invalid channel username: {v}')
@@ -42,15 +44,17 @@ class Settings(BaseModel):
     include_channel_name: bool = Field(True, description="Include channel name in forwarded message")
     include_timestamp: bool = Field(True, description="Include timestamp in forwarded message")
 
-    @validator('log_level')
-    def validate_log_level(cls, v):
+    @field_validator('log_level')
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
         valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         if v.upper() not in valid_levels:
             raise ValueError(f'Log level must be one of: {", ".join(valid_levels)}')
         return v.upper()
 
-    @validator('max_file_size_mb')
-    def validate_max_file_size(cls, v):
+    @field_validator('max_file_size_mb')
+    @classmethod
+    def validate_max_file_size(cls, v: int) -> int:
         if v <= 0 or v > 500:
             raise ValueError('Max file size must be between 1 and 500 MB')
         return v
@@ -62,14 +66,16 @@ class Config(BaseModel):
     discord_webhooks: dict = Field(default_factory=dict)
     settings: Settings = Field(default_factory=Settings)
 
-    @validator('discord_webhooks')
-    def validate_webhooks(cls, v, values):
-        destinations = set()
-        for channel in values.get('channels', []):
-            destinations.update(channel.destinations)
-        
-        missing = destinations - set(v.keys())
-        if missing:
-            raise ValueError(f'Missing webhook configurations for: {", ".join(missing)}')
+    @field_validator('discord_webhooks')
+    @classmethod
+    def validate_webhooks(cls, v: dict, info) -> dict:
+        if 'channels' in info.data:
+            destinations = set()
+            for channel in info.data['channels']:
+                destinations.update(channel.destinations)
+            
+            missing = destinations - set(v.keys())
+            if missing:
+                raise ValueError(f'Missing webhook configurations for: {", ".join(missing)}')
         
         return v
