@@ -242,16 +242,16 @@ class MediaCompressor:
                     f"Compressed {filename}: {current_size_mb:.2f}MB -> {compressed_size_mb:.2f}MB"
                 )
                 return output
-        finally:
-            # Clean up temporary files
-            try:
-                os.unlink(temp_input_path)
-            except (OSError, IOError):
-                pass
-            try:
-                os.unlink(temp_output_path)
-            except (OSError, IOError):
-                pass
+            finally:
+                # Clean up temporary files
+                try:
+                    os.unlink(temp_input_path)
+                except (OSError, IOError):
+                    pass
+                try:
+                    os.unlink(temp_output_path)
+                except (OSError, IOError):
+                    pass
         except Exception as e:
             logger.error(f"Error compressing video {filename}: {e}", exc_info=True)
             return None
