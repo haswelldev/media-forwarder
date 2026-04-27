@@ -1,0 +1,45 @@
+# Media Forwarder Configuration
+# This file defines which Telegram channels to monitor and where to forward messages
+
+# Telegram channels to monitor
+channels:
+  # Example: Monitor a public channel by username
+  - channel: "@example_channel"  # or use numeric ID: -1001234567890
+    destinations:
+      - discord_main
+
+  # Example: Monitor multiple channels to the same destination
+  - channel: "@another_channel"
+    destinations:
+      - discord_main
+
+  # Example: Monitor a channel to multiple destinations
+  - channel: "@third_channel"
+    destinations:
+      - discord_main
+      - discord_backup
+
+# Discord webhook destinations
+discord_webhooks:
+  # Main Discord channel
+  discord_main:
+    url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL_HERE"
+
+  # Backup Discord channel (optional)
+  discord_backup:
+    url: "https://discord.com/api/webhooks/YOUR_BACKUP_WEBHOOK_URL_HERE"
+
+# Application settings
+settings:
+  # Maximum file size in MB to upload to Discord
+  # Discord free tier: 25MB, Discord Nitro: 500MB
+  max_file_size_mb: 10
+
+  # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: INFO
+
+  # Include channel name in forwarded messages
+  include_channel_name: true
+
+  # Include timestamp in forwarded messages
+  include_timestamp: true
