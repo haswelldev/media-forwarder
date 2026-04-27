@@ -6,6 +6,13 @@ from io import BytesIO
 from typing import Optional, Tuple
 from PIL import Image
 
+try:
+    import ffmpeg
+    HAS_FFMPEG_PYTHON = True
+except ImportError:
+    ffmpeg = None
+    HAS_FFMPEG_PYTHON = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -151,8 +158,17 @@ class MediaCompressor:
             logger.debug("ffmpeg not available for video compression")
             return None
         
+        # Check if ffmpeg-python is available
+        if not HAS_FFMPEG_PYTHON:
+            logger.debug("ffmpeg-python not available for video compression")
+            return None
+        
         try:
-            import ffmpeg
+            
+            # First, validate the video data is complete and readable
+            if not await MediaCompressor._validate_video(media_data, filename):
+                logger.debug(f"Video validation failed for {filename}")
+                return None
             
             target_size_bytes = max_size_mb * 1024 * 1024
             
@@ -179,10 +195,11 @@ class MediaCompressor:
                 f"bitrate: {target_bitrate/1024:.0f}kbps, duration: {duration:.1f}s"
             )
             
-            # Build ffmpeg command
+            # Build ffmpeg command with better analysis parameters
+            # Map only video and audio streams, skip attached pictures
             process = (
                 ffmpeg
-                .input('pipe:')
+                .input('pipe:', analyzeduration='10000000', probesize='50000000')
                 .output(
                     'pipe:',
                     format='mp4',
@@ -190,16 +207,25 @@ class MediaCompressor:
                     acodec='aac',
                     video_bitrate=f'{target_bitrate}',
                     audio_bitrate='128k',
-                    preset='medium'
+                    preset='medium',
+                    movflags='faststart',
+                    map='0:v:0',  # First video stream only
+                    map='0:a:0'   # First audio stream only
                 )
                 .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
             )
             
-            # Write input and read output
-            output, err = process.communicate(input=media_data)
+            # Write input and read output with timeout
+            try:
+                output, err = process.communicate(input=media_data, timeout=120)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                logger.error(f"ffmpeg timeout while compressing {filename}")
+                return None
             
             if process.returncode != 0:
-                logger.error(f"ffmpeg failed for {filename}: {err.decode('utf-8', errors='ignore')}")
+                error_output = err.decode('utf-8', errors='ignore')
+                logger.error(f"ffmpeg failed for {filename} (returncode={process.returncode}): {error_output}")
                 return None
             
             compressed_size_mb = len(output) / (1024 * 1024)
@@ -215,9 +241,6 @@ class MediaCompressor:
             )
             return output
             
-        except ImportError:
-            logger.debug("ffmpeg-python not available for video compression")
-            return None
         except Exception as e:
             logger.error(f"Error compressing video {filename}: {e}", exc_info=True)
             return None
@@ -229,22 +252,57 @@ class MediaCompressor:
             import json
             result = subprocess.run(
                 [
-                    'ffprobe', '-v', 'quiet',
+                    'ffprobe', '-v', 'error',
+                    '-analyzeduration', '10000000',
+                    '-probesize', '50000000',
                     '-print_format', 'json',
                     '-show_format',
                     'pipe:0'
                 ],
                 input=media_data,
                 capture_output=True,
-                timeout=30
+                timeout=60
             )
             if result.returncode != 0:
+                logger.debug(f"ffprobe failed: {result.stderr.decode('utf-8', errors='ignore')}")
                 return None
             probe = json.loads(result.stdout)
             duration = float(probe['format']['duration'])
             return duration
-        except Exception:
+        except subprocess.TimeoutExpired:
+            logger.debug("ffprobe timeout while getting video duration")
             return None
+        except Exception as e:
+            logger.debug(f"Error getting video duration: {e}")
+            return None
+    
+    @staticmethod
+    async def _validate_video(media_data: bytes, filename: str) -> bool:
+        """Validate that the video data is complete and readable."""
+        try:
+            result = subprocess.run(
+                [
+                    'ffprobe', '-v', 'error',
+                    '-analyzeduration', '10000000',
+                    '-probesize', '50000000',
+                    '-show_entries', 'format=duration,size,bit_rate',
+                    '-of', 'default=noprint_wrappers=1',
+                    'pipe:0'
+                ],
+                input=media_data,
+                capture_output=True,
+                timeout=60
+            )
+            if result.returncode != 0:
+                logger.debug(f"Video validation failed for {filename}: {result.stderr.decode('utf-8', errors='ignore')}")
+                return False
+            return True
+        except subprocess.TimeoutExpired:
+            logger.debug(f"Video validation timeout for {filename}")
+            return False
+        except Exception as e:
+            logger.debug(f"Error validating video {filename}: {e}")
+            return False
     
     @staticmethod
     async def compress_media(

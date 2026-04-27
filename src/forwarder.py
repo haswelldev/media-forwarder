@@ -155,7 +155,16 @@ class MediaForwarder:
             if has_media and media_data:
                 # Check if compression is needed and try to compress
                 file_size_mb = len(media_data) / (1024 * 1024)
-                if file_size_mb > max_file_size:
+                
+                # Log file size for debugging
+                logger.debug(f"Media file {filename}: {file_size_mb:.2f}MB, type: {media_type}")
+                
+                # Check if media data seems valid (not too small for the type)
+                if file_size_mb < 0.01:  # Less than 10KB is suspicious
+                    logger.warning(f"Downloaded media {filename} is too small ({file_size_mb:.2f}MB), skipping")
+                    final_media_data = None
+                    skip_message = True
+                elif file_size_mb > max_file_size:
                     logger.info(
                         f'Media too large ({file_size_mb:.2f}MB > {max_file_size}MB), '
                         f'attempting compression for {destination_name}'
