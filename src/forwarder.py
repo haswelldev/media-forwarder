@@ -32,7 +32,12 @@ class MediaForwarder:
         # Find channel configuration
         channel_config = self._get_channel_config(chat)
         if not channel_config:
-            logger.warning(f'No configuration found for channel: {chat.username or chat.id}')
+            # Get the channel identifier for logging
+            if chat.username:
+                channel_id = f'@{chat.username}'
+            else:
+                channel_id = f'-100{chat.id}'
+            logger.warning(f'No configuration found for channel: {channel_id}')
             return
 
         # Get channel-specific settings (if any)
@@ -208,7 +213,17 @@ class MediaForwarder:
 
     def _get_channel_config(self, chat: Channel):
         """Get channel configuration for a chat."""
-        channel_identifier = f'@{chat.username}' if chat.username else str(chat.id)
+        if chat.username:
+            channel_identifier = f'@{chat.username}'
+        else:
+            # For channels, construct the full channel ID
+            # The full Telegram channel ID format is -100XXXXXXXXXX
+            # Telethon's chat.id for channels is the numeric part (XXXXXXXXXX)
+            # We need to prepend -100 to match the configuration format
+            bare_id = chat.id
+            channel_identifier = f'-100{bare_id}'
+        
+        logger.debug(f'Looking for config with identifier: {channel_identifier}')
         
         for channel_config in self.config.config.channels:
             if channel_config.channel == channel_identifier:

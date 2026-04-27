@@ -107,11 +107,11 @@ class TestMediaForwarder:
     def test_get_channel_config_by_id(self, mock_config_manager):
         """Test getting channel config by numeric ID."""
         channel = Mock(spec=Channel)
-        channel.id = -1001234567890
+        channel.id = 1234567890  # Positive bare ID
         channel.username = None
         
         with patch('src.forwarder.TelegramMonitor'):
-            # Update mock config to use numeric ID
+            # Update mock config to use the reconstructed ID format
             mock_config_manager.config.channels[0].channel = "-1001234567890"
             forwarder = MediaForwarder(mock_config_manager)
             config = forwarder._get_channel_config(channel)
