@@ -7,6 +7,25 @@ from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
+# Global shared session
+_shared_session: Optional[aiohttp.ClientSession] = None
+
+
+async def get_shared_session() -> aiohttp.ClientSession:
+    """Get or create shared aiohttp session."""
+    global _shared_session
+    if _shared_session is None or _shared_session.closed:
+        _shared_session = aiohttp.ClientSession()
+    return _shared_session
+
+
+async def close_shared_session():
+    """Close the shared session."""
+    global _shared_session
+    if _shared_session and not _shared_session.closed:
+        await _shared_session.close()
+        _shared_session = None
+
 
 class DiscordSender:
     """Send messages to Discord via webhooks."""
@@ -16,18 +35,6 @@ class DiscordSender:
         self.webhook_url = webhook_url
         self.max_file_size_mb = max_file_size_mb
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
-        self.session = None
-
-    async def _get_session(self):
-        """Get or create aiohttp session."""
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
-        return self.session
-
-    async def close(self):
-        """Close aiohttp session."""
-        if self.session and not self.session.closed:
-            await self.session.close()
 
     async def send_message(
         self,
@@ -37,7 +44,8 @@ class DiscordSender:
     ) -> bool:
         """Send message to Discord."""
         try:
-            session = await self._get_session()
+            # Use shared session for connection pooling
+            session = await get_shared_session()
             
             # Prepare payload
             payload = {}

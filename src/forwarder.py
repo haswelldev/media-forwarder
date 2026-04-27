@@ -272,3 +272,7 @@ class MediaForwarder:
         """Stop the forwarder."""
         logger.info('Stopping media forwarder')
         await self.telegram.disconnect()
+        # Close shared aiohttp session
+        from src.discord_client import close_shared_session
+        await close_shared_session()
+        logger.info('Discord session closed')

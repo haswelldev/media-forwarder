@@ -36,7 +36,7 @@ class TestDiscordSender:
         mock_response.release = AsyncMock()
         mock_session.post.return_value = mock_response
         
-        with patch.object(sender, '_get_session', return_value=mock_session):
+        with patch('src.discord_client.get_shared_session', return_value=mock_session):
             result = await sender.send_message(text="Test message")
             
             assert result is True
@@ -60,7 +60,7 @@ class TestDiscordSender:
         mock_response.release = AsyncMock()
         mock_session.post.return_value = mock_response
         
-        with patch.object(sender, '_get_session', return_value=mock_session):
+        with patch('src.discord_client.get_shared_session', return_value=mock_session):
             media_data = b"fake image data" * 1000  # Small enough to pass size check
             
             result = await sender.send_message(text="Test", media_data=media_data, filename="test.jpg")
@@ -79,7 +79,7 @@ class TestDiscordSender:
         mock_response.release = AsyncMock()
         mock_session.post.return_value = mock_response
         
-        with patch.object(sender, '_get_session', return_value=mock_session):
+        with patch('src.discord_client.get_shared_session', return_value=mock_session):
             # Create data larger than 10MB
             media_data = b"x" * (11 * 1024 * 1024)
             
@@ -95,7 +95,7 @@ class TestDiscordSender:
     @pytest.mark.asyncio
     async def test_send_with_oversized_media_no_text(self, sender):
         """Test sending oversized media without text."""
-        with patch.object(sender, '_get_session', return_value=AsyncMock()):
+        with patch('src.discord_client.get_shared_session', return_value=AsyncMock()):
             # Create data larger than 10MB
             media_data = b"x" * (11 * 1024 * 1024)
             
@@ -112,7 +112,7 @@ class TestDiscordSender:
         mock_response.release = AsyncMock()
         mock_session.post.return_value = mock_response
         
-        with patch.object(sender, '_get_session', return_value=mock_session):
+        with patch('src.discord_client.get_shared_session', return_value=mock_session):
             result = await sender.send_message(text="Test message")
             
             assert result is False
@@ -123,7 +123,7 @@ class TestDiscordSender:
         mock_session = AsyncMock()
         mock_session.post.side_effect = ClientError("Connection error")
         
-        with patch.object(sender, '_get_session', return_value=mock_session):
+        with patch('src.discord_client.get_shared_session', return_value=mock_session):
             result = await sender.send_message(text="Test message")
             
             assert result is False
@@ -166,11 +166,18 @@ class TestDiscordSender:
 
     @pytest.mark.asyncio
     async def test_close_session(self, sender):
-        """Test closing session."""
+        """Test closing shared session."""
+        from src.discord_client import _shared_session, close_shared_session
+        import src.discord_client as dc
+        
+        # Set up a mock session
         mock_session = AsyncMock()
-        sender.session = mock_session
+        dc._shared_session = mock_session
         mock_session.closed = False
         
-        await sender.close()
+        # Close it
+        await close_shared_session()
+        
+        mock_session.close.assert_called_once()
         
         mock_session.close.assert_called_once()
