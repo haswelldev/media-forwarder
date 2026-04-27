@@ -154,18 +154,12 @@ class MediaCompressor:
             import ffmpeg
             
             target_size_bytes = max_size_mb * 1024 * 1024
-            input_stream = BytesIO(media_data)
-            output_stream = BytesIO()
             
             # Calculate target bitrate (in bits per second)
-            # Use a conservative estimate with some overhead
-            duration = await MediaCompressor._get_video_duration(input_stream)
+            duration = await MediaCompressor._get_video_duration(media_data)
             if duration is None:
                 logger.debug(f"Could not get video duration for {filename}")
                 return None
-            
-            # Reset stream position
-            input_stream.seek(0)
             
             # Target bitrate with 10% overhead for container
             target_bitrate = int((target_size_bytes * 8) / duration * 0.9)
@@ -177,7 +171,6 @@ class MediaCompressor:
                     f"Target bitrate {target_bitrate/1024:.0f}kbps too low for {filename}, "
                     f"using minimum {min_bitrate/1024:.0f}kbps"
                 )
-                # Try with min bitrate, but may exceed size limit
                 target_bitrate = min_bitrate
             
             logger.debug(
@@ -188,7 +181,7 @@ class MediaCompressor:
             # Build ffmpeg command
             process = (
                 ffmpeg
-                .input('pipe:', format='mp4')
+                .input('pipe:')
                 .output(
                     'pipe:',
                     format='mp4',
@@ -196,9 +189,7 @@ class MediaCompressor:
                     acodec='aac',
                     video_bitrate=f'{target_bitrate}',
                     audio_bitrate='128k',
-                    preset='medium',
-                    movflags='faststart',
-                    crf=23
+                    preset='medium'
                 )
                 .run_async(pipe_stdin=True, pipe_stdout=True, pipe_stderr=True)
             )
@@ -231,12 +222,24 @@ class MediaCompressor:
             return None
     
     @staticmethod
-    async def _get_video_duration(input_stream: BytesIO) -> Optional[float]:
-        """Get video duration using ffprobe."""
+    async def _get_video_duration(media_data: bytes) -> Optional[float]:
+        """Get video duration using ffprobe via pipe."""
         try:
-            import ffmpeg
-            
-            probe = ffmpeg.probe(input_stream)
+            import json
+            result = subprocess.run(
+                [
+                    'ffprobe', '-v', 'quiet',
+                    '-print_format', 'json',
+                    '-show_format',
+                    'pipe:0'
+                ],
+                input=media_data,
+                capture_output=True,
+                timeout=30
+            )
+            if result.returncode != 0:
+                return None
+            probe = json.loads(result.stdout)
             duration = float(probe['format']['duration'])
             return duration
         except Exception:
