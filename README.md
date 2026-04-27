@@ -17,6 +17,8 @@ A Dockerized service that monitors Telegram channels and automatically forwards 
 - 📷 **Media-only mode** - Forward only messages with media
 - 🔇 **Caption removal** - Strip captions from media posts
 - 🌐 **Auto-translation** - Translate captions to English
+- 🎯 **Per-destination limits** - Different file size limits per Discord server
+- 🗜️ **Smart compression** - Automatically compress oversized images
 
 ## Quick Start
 
@@ -143,6 +145,19 @@ discord_webhooks:
 - Skips compression for files > 50MB (too large for efficient compression)
 - Currently supports images only (photos)
 - Videos and documents are not compressed (would lose quality/corruption risk)
+
+**Compression Algorithm:**
+1. Checks if file exceeds destination's max file size
+2. Verifies compression is feasible (file < 50MB, is an image)
+3. Progressively reduces JPEG quality from 95% to 60%
+4. Accepts compression only if size reduces by at least 30%
+5. Sends compressed image if successful, falls back to text-only if not
+
+**Quality Thresholds:**
+- Maximum quality: 95%
+- Minimum acceptable quality: 60%
+- Minimum compression ratio: 30% reduction
+- Maximum source size: 50MB
 
 ```yaml
 channels:
