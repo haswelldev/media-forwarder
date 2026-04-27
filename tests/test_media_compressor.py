@@ -193,8 +193,8 @@ class TestCompressVideo:
                         mock_file.read.return_value = b"compressed_data"
                         mock_open.return_value.__enter__.return_value = mock_file
                         
-                        # Mock ffmpeg.run()
-                        mock_ffmpeg.input.return_value.output.return_value.overwrite_output.return_value.run.return_value = None
+                        # Mock ffmpeg.run() - returns tuple (out, err)
+                        mock_ffmpeg.input.return_value.output.return_value.overwrite_output.return_value.run.return_value = (b'', b'')
                         
                         result = await MediaCompressor.compress_video(data, 10)
                         assert result == b"compressed_data"

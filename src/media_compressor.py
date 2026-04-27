@@ -239,11 +239,12 @@ class MediaCompressor:
                     if not os.path.exists(temp_output_path):
                         logger.error(f"ffmpeg did not create output file for {filename}")
                         return None
-                except ffmpeg.Error as e:
-                    logger.error(f"ffmpeg error for {filename}: {e.stderr.decode('utf-8', errors='ignore')}")
-                    return None
                 except Exception as e:
-                    logger.error(f"Unexpected error during ffmpeg compression for {filename}: {e}", exc_info=True)
+                    # Check if this is an ffmpeg.Error (if ffmpeg module is available)
+                    if hasattr(ffmpeg, 'Error') and isinstance(e, ffmpeg.Error):
+                        logger.error(f"ffmpeg error for {filename}: {e.stderr.decode('utf-8', errors='ignore')}")
+                    else:
+                        logger.error(f"Unexpected error during ffmpeg compression for {filename}: {e}", exc_info=True)
                     return None
                 
                 # Read the compressed video from temp file
