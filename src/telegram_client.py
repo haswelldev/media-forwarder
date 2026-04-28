@@ -130,30 +130,31 @@ class TelegramMonitor:
         async def handle_private_message(event):
             """Handle forwarded messages from private chats."""
             from telethon.tl.types import User
-            
+
             if not event.chat or isinstance(event.chat, Channel):
                 return
-            
+
             message = event.message
-            
+
             if not message.text and not message.media:
                 return
-            
-            if not message.forward or not message.forward.from_:
+
+            if not message.forward:
                 return
-            
-            from_chat = message.forward.from_
-            if not isinstance(from_chat, Channel):
+
+            # Safely get the 'from_' attribute which may not exist on all Forward objects
+            from_chat = getattr(message.forward, 'from_', None)
+            if not from_chat or not isinstance(from_chat, Channel):
                 return
-            
+
             if from_chat.id not in self.monitored_channel_ids:
                 return
-            
+
             logger.info(
                 f'New forwarded message from channel {from_chat.title or from_chat.username} '
                 f'(ID: {message.id})'
             )
-            
+
             if self.message_callback:
                 try:
                     await self.message_callback(message, from_chat)
