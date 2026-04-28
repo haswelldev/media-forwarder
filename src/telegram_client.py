@@ -60,24 +60,15 @@ class TelegramMonitor:
                 # Convert channel identifier to proper format
                 channel_id = channel_config.channel
                 if channel_id.lstrip('-').isdigit():
-                    # Numeric channel ID - convert to integer
                     channel_id = int(channel_id)
 
-                # Try to resolve the channel
-                entity = await self.client.get_input_entity(channel_id)
-                # Use the full channel ID (with -100 prefix) for event filtering
-                # The chats parameter in NewMessage needs the full channel ID
-                entity_id = getattr(entity, 'channel_id', getattr(entity, 'id', None))
-                if entity_id is None:
-                    logger.error(f'Could not extract ID from entity for {channel_config.channel}')
-                    continue
+                # Verify the channel is accessible by resolving it
+                await self.client.get_input_entity(channel_id)
 
-                # For channels, use the full ID with -100 prefix
-                if isinstance(entity, Channel) and hasattr(entity, 'channel_id'):
-                    full_id = -1000000000000 + entity.channel_id
-                    channels_to_monitor.append(full_id)
-                else:
-                    channels_to_monitor.append(entity_id)
+                # Use the channel_id directly for event filtering.
+                # For numeric IDs like -100XXXXXXXXXX, Telethon's NewMessage
+                # event needs the full ID (with -100 prefix).
+                channels_to_monitor.append(channel_id)
 
                 logger.info(f'Added channel to monitoring: {channel_config.channel}')
             except Exception as e:
@@ -154,14 +145,32 @@ class TelegramMonitor:
             if not from_chat or not isinstance(from_chat, Channel):
                 return
 
-            # Calculate full channel ID (with -100 prefix) for comparison
-            from_chat_id = from_chat.id
-            if hasattr(from_chat, 'channel_id'):
-                from_chat_full_id = -1000000000000 + from_chat.channel_id
-            else:
-                from_chat_full_id = from_chat.id
+            # Check if the forwarded message is from a monitored channel
+            from_chat_id = getattr(from_chat, 'id', None)
+            if from_chat_id is None:
+                return
 
-            if from_chat_full_id not in self.monitored_channel_ids:
+            # Check if from_chat matches any monitored channel
+            # monitored_channel_ids may contain full IDs (-100XXX) or usernames
+            matched = False
+            for monitored_id in self.monitored_channel_ids:
+                if isinstance(monitored_id, int) and monitored_id < 0:
+                    # Full channel ID (e.g. -1001234567890) -> bare ID
+                    bare_monitored = abs(monitored_id) - 1000000000000
+                    if from_chat_id == bare_monitored:
+                        matched = True
+                        break
+                elif isinstance(monitored_id, int):
+                    if from_chat_id == monitored_id:
+                        matched = True
+                        break
+                elif isinstance(monitored_id, str):
+                    from_chat_username = getattr(from_chat, 'username', None)
+                    if from_chat_username and f'@{from_chat_username}' == monitored_id:
+                        matched = True
+                        break
+
+            if not matched:
                 return
 
             logger.info(

@@ -197,7 +197,7 @@ class TestTelegramMonitor:
             monitor = TelegramMonitor(mock_config_manager)
             monitor.client = mock_client
             await monitor.start_monitoring()
-            assert monitor.monitored_channel_ids == {100, 200}
+            assert monitor.monitored_channel_ids == {"@ch1", "@ch2"}
 
     @pytest.mark.asyncio
     async def test_start_monitoring_entity_id_extraction_failure(self, mock_config_manager):
@@ -215,7 +215,8 @@ class TestTelegramMonitor:
             monitor = TelegramMonitor(mock_config_manager)
             monitor.client = mock_client
             await monitor.start_monitoring()
-            assert not hasattr(monitor, 'monitored_channel_ids') or not monitor.monitored_channel_ids
+            # Channel is still added even with a bad entity since we use channel_id directly
+            assert "@bad_channel" in monitor.monitored_channel_ids
 
     @pytest.mark.asyncio
     async def test_start_monitoring_no_client(self, mock_config_manager):
@@ -309,7 +310,7 @@ def _setup_handlers(monitor):
     monitor.client.on = capture_handler
     mock_entity = _make_input_peer_channel(1234567890)
     monitor.client.get_input_entity = AsyncMock(return_value=mock_entity)
-    monitor.config.config.channels = [Mock(channel="@test", destinations=["d"])]
+    monitor.config.config.channels = [Mock(channel="-1001234567890", destinations=["d"])]
 
     return handlers
 
@@ -408,6 +409,7 @@ async def test_private_message_handler_from_monitored_channel(monitor_with_handl
     forward_channel = Mock(spec=Channel)
     forward_channel.id = 1234567890
     forward_channel.title = "Forwarded Channel"
+    forward_channel.username = None
 
     event = Mock()
     event.chat = user_chat
@@ -436,6 +438,7 @@ async def test_private_message_handler_from_unmonitored_channel(monitor_with_han
     forward_channel = Mock(spec=Channel)
     forward_channel.id = 9999999
     forward_channel.title = "Unmonitored"
+    forward_channel.username = None
 
     event = Mock()
     event.chat = user_chat
@@ -554,6 +557,7 @@ async def test_private_message_handler_callback_exception(monitor_with_handlers)
     forward_channel = Mock(spec=Channel)
     forward_channel.id = 1234567890
     forward_channel.title = "Forwarded Channel"
+    forward_channel.username = None
 
     event = Mock()
     event.chat = user_chat
