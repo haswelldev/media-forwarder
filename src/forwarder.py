@@ -34,7 +34,8 @@ class MediaForwarder:
     async def handle_message(self, message: Message, chat: Channel):
         """Handle incoming Telegram message."""
         # Check if message is part of a group (album)
-        if message.grouped_id:
+        grouped_id = getattr(message, 'grouped_id', None)
+        if grouped_id:
             await self._handle_grouped_message(message, chat)
         else:
             await self._handle_single_message(message, chat)
