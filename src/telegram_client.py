@@ -62,16 +62,23 @@ class TelegramMonitor:
                 if channel_id.lstrip('-').isdigit():
                     # Numeric channel ID - convert to integer
                     channel_id = int(channel_id)
-                
+
                 # Try to resolve the channel
                 entity = await self.client.get_input_entity(channel_id)
-                # Extract the bare channel ID for event filtering
-                # NewMessage events use bare channel IDs, not full IDs with -100 prefix
+                # Use the full channel ID (with -100 prefix) for event filtering
+                # The chats parameter in NewMessage needs the full channel ID
                 entity_id = getattr(entity, 'channel_id', getattr(entity, 'id', None))
                 if entity_id is None:
                     logger.error(f'Could not extract ID from entity for {channel_config.channel}')
                     continue
-                channels_to_monitor.append(entity_id)
+
+                # For channels, use the full ID with -100 prefix
+                if isinstance(entity, Channel) and hasattr(entity, 'channel_id'):
+                    full_id = -1000000000000 + entity.channel_id
+                    channels_to_monitor.append(full_id)
+                else:
+                    channels_to_monitor.append(entity_id)
+
                 logger.info(f'Added channel to monitoring: {channel_config.channel}')
             except Exception as e:
                 logger.warning(
@@ -147,7 +154,14 @@ class TelegramMonitor:
             if not from_chat or not isinstance(from_chat, Channel):
                 return
 
-            if from_chat.id not in self.monitored_channel_ids:
+            # Calculate full channel ID (with -100 prefix) for comparison
+            from_chat_id = from_chat.id
+            if hasattr(from_chat, 'channel_id'):
+                from_chat_full_id = -1000000000000 + from_chat.channel_id
+            else:
+                from_chat_full_id = from_chat.id
+
+            if from_chat_full_id not in self.monitored_channel_ids:
                 return
 
             logger.info(
