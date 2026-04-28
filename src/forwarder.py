@@ -2,6 +2,8 @@
 
 import logging
 from datetime import datetime
+from typing import List, Optional, Tuple
+import asyncio
 from telethon.tl.types import Channel, Message, MessageMediaPhoto
 from deep_translator import GoogleTranslator
 from src.config import ConfigManager
@@ -21,6 +23,8 @@ class MediaForwarder:
         self.telegram = TelegramMonitor(config_manager)
         self.translator = GoogleTranslator(source='auto', target='en')
         self.compressor = MediaCompressor()
+        self.message_groups = {}
+        self.group_timeout = 3.0
 
     async def initialize(self):
         """Initialize forwarder."""
@@ -29,6 +33,140 @@ class MediaForwarder:
 
     async def handle_message(self, message: Message, chat: Channel):
         """Handle incoming Telegram message."""
+        # Check if message is part of a group (album)
+        if message.grouped_id:
+            await self._handle_grouped_message(message, chat)
+        else:
+            await self._handle_single_message(message, chat)
+
+    async def _handle_grouped_message(self, message: Message, chat: Channel):
+        """Handle message that's part of a group (album)."""
+        grouped_id = message.grouped_id
+
+        if grouped_id not in self.message_groups:
+            self.message_groups[grouped_id] = {
+                'messages': [],
+                'timer_task': None
+            }
+
+        group = self.message_groups[grouped_id]
+        group['messages'].append((message, chat))
+
+        logger.debug(f'Added message {message.id} to group {grouped_id}, total: {len(group["messages"])}')
+
+        # Cancel existing timer if any
+        if group['timer_task'] and not group['timer_task'].done():
+            group['timer_task'].cancel()
+
+        # Set new timer to process the group
+        async def process_group():
+            await asyncio.sleep(self.group_timeout)
+            await self._process_message_group(grouped_id)
+
+        group['timer_task'] = asyncio.create_task(process_group())
+
+    async def _process_message_group(self, grouped_id):
+        """Process all messages in a group and forward together."""
+        if grouped_id not in self.message_groups:
+            return
+
+        group = self.message_groups.pop(grouped_id)
+        messages_and_chats = group['messages']
+
+        if not messages_and_chats:
+            return
+
+        logger.info(f'Processing group {grouped_id} with {len(messages_and_chats)} messages')
+
+        # Use the first message for channel config and text (caption is on first message)
+        first_message, chat = messages_and_chats[0]
+
+        # Find channel configuration
+        channel_config = self._get_channel_config(chat)
+        if not channel_config:
+            if chat.username:
+                channel_id = f'@{chat.username}'
+            else:
+                channel_id = f'-100{chat.id}'
+            logger.warning(f'No configuration found for channel: {channel_id}')
+            return
+
+        channel_settings = channel_config.settings
+
+        # Extract text from first message (caption)
+        text = first_message.text or first_message.message
+
+        # Collect all media from the group
+        media_items = []
+        for msg, _ in messages_and_chats:
+            media_data = None
+            media_type = None
+            filename = 'file'
+
+            if msg.photo:
+                media_data = await self.telegram.download_media(msg)
+                media_type = 'photo'
+                filename = f'photo_{msg.id}.jpg'
+            elif msg.video:
+                media_data = await self.telegram.download_media(msg)
+                media_type = 'video'
+                if msg.video.attributes:
+                    for attr in msg.video.attributes:
+                        if hasattr(attr, 'file_name') and attr.file_name:
+                            filename = attr.file_name
+                            break
+                if filename == 'file':
+                    filename = f'video_{msg.id}.mp4'
+            elif msg.document:
+                media_data = await self.telegram.download_media(msg)
+                media_type = 'document'
+                if msg.document.attributes:
+                    for attr in msg.document.attributes:
+                        if hasattr(attr, 'file_name') and attr.file_name:
+                            filename = attr.file_name
+                            break
+                if filename == 'file':
+                    filename = f'document_{msg.id}'
+
+            if media_data:
+                media_items.append({
+                    'data': media_data,
+                    'type': media_type,
+                    'filename': filename
+                })
+
+        if not media_items:
+            logger.debug(f'No media found in group {grouped_id}, skipping')
+            return
+
+        # Check media-only filter
+        if channel_settings and channel_settings.media_only:
+            # We have media, so continue
+            pass
+
+        # Remove captions if configured
+        if channel_settings and channel_settings.remove_captions:
+            text = None
+            logger.debug(f'Removed caption from group {grouped_id}')
+
+        # Translate captions if configured
+        if text and channel_settings and channel_settings.translate_captions:
+            text = await self._translate_text(text)
+            if text:
+                logger.debug(f'Translated caption for group {grouped_id}')
+
+        # Format message text
+        formatted_text = self._format_message(text, chat, first_message, channel_settings)
+
+        # Forward to each destination
+        for destination_name in channel_config.destinations:
+            await self._forward_group_to_destination(
+                first_message, chat, destination_name,
+                text, formatted_text, media_items, channel_settings
+            )
+
+    async def _handle_single_message(self, message: Message, chat: Channel):
+        """Handle a single (non-grouped) message."""
         # Find channel configuration
         channel_config = self._get_channel_config(chat)
         if not channel_config:
@@ -151,14 +289,14 @@ class MediaForwarder:
             # Process media if present
             final_media_data = media_data
             skip_message = False
-            
+
             if has_media and media_data:
                 # Check if compression is needed and try to compress
                 file_size_mb = len(media_data) / (1024 * 1024)
-                
+
                 # Log file size for debugging
                 logger.debug(f"Media file {filename}: {file_size_mb:.2f}MB, type: {media_type}")
-                
+
                 # Check if media data seems valid (not too small for the type)
                 if file_size_mb < 0.01:  # Less than 10KB is suspicious
                     logger.warning(f"Downloaded media {filename} is too small ({file_size_mb:.2f}MB), skipping")
@@ -169,11 +307,11 @@ class MediaForwarder:
                         f'Media too large ({file_size_mb:.2f}MB > {max_file_size}MB), '
                         f'attempting compression for {destination_name}'
                     )
-                    
+
                     compressed_data = await self.compressor.compress_media(
                         media_data, media_type, max_file_size, filename
                     )
-                    
+
                     if compressed_data:
                         final_media_data = compressed_data
                         logger.info(
@@ -194,7 +332,7 @@ class MediaForwarder:
                         else:
                             # If there's text, we'll send text only
                             final_media_data = None
-            
+
             # Skip if there's nothing to send
             if skip_message or (not final_media_data and not formatted_text):
                 logger.info(f'Skipping message {message.id} - no content to send')
@@ -224,6 +362,119 @@ class MediaForwarder:
         except Exception as e:
             logger.error(
                 f'Error forwarding to {destination_name}: {e}',
+                exc_info=True
+            )
+
+    async def _forward_group_to_destination(
+        self,
+        message: Message,
+        chat: Channel,
+        destination_name: str,
+        text: str,
+        formatted_text: str,
+        media_items: List[dict],
+        channel_settings
+    ):
+        """Forward grouped messages (album) to a specific destination."""
+        try:
+            # Get destination config
+            webhook_config = self.config.config.discord_webhooks.get(destination_name)
+            if not webhook_config:
+                logger.error(f'Destination config not found: {destination_name}')
+                return
+
+            # Handle both dict and object formats for webhook_config
+            if isinstance(webhook_config, dict):
+                webhook_url = webhook_config['url']
+                max_file_size = webhook_config.get('max_file_size_mb')
+            else:
+                webhook_url = webhook_config.url
+                max_file_size = webhook_config.max_file_size_mb
+
+            # Determine max file size (destination > channel > global)
+            if max_file_size:
+                pass  # Use destination size
+            elif channel_settings and channel_settings.max_file_size_mb:
+                max_file_size = channel_settings.max_file_size_mb
+            else:
+                max_file_size = self.config.config.settings.max_file_size_mb
+
+            sender = DiscordSender(webhook_url, max_file_size)
+
+            # Process each media item
+            final_media_items = []
+            skip_message = False
+
+            for item in media_items:
+                media_data = item['data']
+                media_type = item['type']
+                filename = item['filename']
+
+                if not media_data:
+                    continue
+
+                # Check if compression is needed
+                file_size_mb = len(media_data) / (1024 * 1024)
+
+                logger.debug(f"Media file {filename}: {file_size_mb:.2f}MB, type: {media_type}")
+
+                # Check if media data seems valid
+                if file_size_mb < 0.01:
+                    logger.warning(f"Downloaded media {filename} is too small ({file_size_mb:.2f}MB), skipping")
+                    continue
+                elif file_size_mb > max_file_size:
+                    logger.info(
+                        f'Media too large ({file_size_mb:.2f}MB > {max_file_size}MB), '
+                        f'attempting compression for {destination_name}'
+                    )
+
+                    compressed_data = await self.compressor.compress_media(
+                        media_data, media_type, max_file_size, filename
+                    )
+
+                    if compressed_data:
+                        final_media_items.append({
+                            'data': compressed_data,
+                            'type': media_type,
+                            'filename': filename
+                        })
+                        logger.info(
+                            f'Successfully compressed media for {destination_name}: '
+                            f'{file_size_mb:.2f}MB -> {len(compressed_data)/(1024*1024):.2f}MB'
+                        )
+                    else:
+                        logger.warning(
+                            f'Could not compress media {filename} for {destination_name}, skipping this media'
+                        )
+                        # Continue with other media items
+                else:
+                    final_media_items.append({
+                        'data': media_data,
+                        'type': media_type,
+                        'filename': filename
+                    })
+
+            # Skip if there's nothing to send
+            if not final_media_items and not formatted_text:
+                logger.info(f'Skipping group message - no content to send')
+                return
+
+            # Send all media in one message
+            success = await sender.send_multiple_media(formatted_text, final_media_items)
+
+            if success:
+                logger.info(
+                    f'Forwarded grouped message from {chat.username or chat.id} '
+                    f'with {len(final_media_items)} media items to {destination_name}'
+                )
+            else:
+                logger.warning(
+                    f'Failed to forward grouped message to {destination_name}'
+                )
+
+        except Exception as e:
+            logger.error(
+                f'Error forwarding group to {destination_name}: {e}',
                 exc_info=True
             )
 

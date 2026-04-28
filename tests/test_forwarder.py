@@ -1,6 +1,7 @@
 """Unit tests for forwarder module."""
 
 import pytest
+import asyncio
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from datetime import datetime
 from telethon.tl.types import Channel, Message, MessageMediaPhoto, MessageMediaDocument
@@ -46,6 +47,7 @@ def mock_message():
     message.video = None
     message.document = None
     message.media = None
+    message.grouped_id = None
     message.date = datetime(2024, 1, 15, 10, 30, 0)
     return message
 
@@ -274,19 +276,70 @@ class TestHandleMessage:
         channel_settings.include_timestamp = None
         channel_settings.max_file_size_mb = None
         channel_config.settings = channel_settings
-        
+
         forwarder.config.config.channels = [channel_config]
-        
+
         mock_message.photo = Mock()
         mock_message.media = Mock()
         forwarder.telegram.download_media = AsyncMock(return_value=b"data")
-        
+
         with patch.object(forwarder, '_forward_to_destination', new_callable=AsyncMock) as mock_forward:
             await forwarder.handle_message(mock_message, mock_channel)
             # Text should be None due to remove_captions
             call_args = mock_forward.call_args
             # text is the 4th positional arg
             assert call_args[0][3] is None
+
+    @pytest.mark.asyncio
+    async def test_handle_grouped_messages(self, forwarder, mock_channel, mock_message):
+        """Test handling grouped messages (album)."""
+        channel_config = Mock()
+        channel_config.channel = "@test_channel"
+        channel_config.destinations = ["discord_main"]
+        channel_config.settings = None
+
+        forwarder.config.config.channels = [channel_config]
+
+        # Create two messages with the same grouped_id (simulating an album)
+        mock_message1 = Mock(spec=Message)
+        mock_message1.id = 123
+        mock_message1.text = "Album caption"
+        mock_message1.message = "Album caption"
+        mock_message1.photo = Mock()
+        mock_message1.video = None
+        mock_message1.document = None
+        mock_message1.media = Mock()
+        mock_message1.grouped_id = 999
+        mock_message1.date = datetime(2024, 1, 15, 10, 30, 0)
+
+        mock_message2 = Mock(spec=Message)
+        mock_message2.id = 124
+        mock_message2.text = None
+        mock_message2.message = None
+        mock_message2.photo = Mock()
+        mock_message2.video = None
+        mock_message2.document = None
+        mock_message2.media = Mock()
+        mock_message2.grouped_id = 999
+        mock_message2.date = datetime(2024, 1, 15, 10, 30, 0)
+
+        forwarder.telegram.download_media = AsyncMock(side_effect=[b"photo1", b"photo2"])
+
+        with patch.object(forwarder, '_forward_group_to_destination', new_callable=AsyncMock) as mock_forward_group:
+            await forwarder.handle_message(mock_message1, mock_channel)
+            # First message should be buffered, not forwarded immediately
+            mock_forward_group.assert_not_called()
+
+            await forwarder.handle_message(mock_message2, mock_channel)
+            # Second message should also be buffered
+            mock_forward_group.assert_not_called()
+
+            await asyncio.sleep(forwarder.group_timeout + 0.1)
+            # After timeout, group should be processed
+            mock_forward_group.assert_called_once()
+            call_args = mock_forward_group.call_args
+            # Should have 2 media items (at index 5)
+            assert len(call_args[0][5]) == 2
 
 
 class TestForwardToDestination:

@@ -298,3 +298,73 @@ class TestDiscordSenderHelpers:
 
         assert result is True
         mock_send.assert_called_once_with("File", b"doc_data", "report.pdf")
+
+    @pytest.mark.asyncio
+    async def test_send_multiple_media(self):
+        sender = DiscordSender("https://discord.com/webhook")
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.release = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.post = AsyncMock(return_value=mock_response)
+        mock_session.closed = False
+
+        media_items = [
+            {'data': b"photo1", 'type': 'photo', 'filename': 'photo1.jpg'},
+            {'data': b"photo2", 'type': 'photo', 'filename': 'photo2.jpg'},
+        ]
+
+        with patch('src.discord_client.get_shared_session', return_value=mock_session):
+            result = await sender.send_multiple_media("Check these photos", media_items)
+
+        assert result is True
+        mock_session.post.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_multiple_media_one_too_large(self):
+        sender = DiscordSender("https://discord.com/webhook", max_file_size_mb=1)
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.release = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.post = AsyncMock(return_value=mock_response)
+        mock_session.closed = False
+
+        media_items = [
+            {'data': b"photo1", 'type': 'photo', 'filename': 'photo1.jpg'},
+            {'data': b"x" * (2 * 1024 * 1024), 'type': 'photo', 'filename': 'large.jpg'},  # 2MB
+            {'data': b"photo2", 'type': 'photo', 'filename': 'photo2.jpg'},
+        ]
+
+        with patch('src.discord_client.get_shared_session', return_value=mock_session):
+            result = await sender.send_multiple_media("Check these photos", media_items)
+
+        assert result is True
+        # Should still send, but with only 2 files (the large one is skipped)
+
+    @pytest.mark.asyncio
+    async def test_send_multiple_media_all_too_large_with_text(self):
+        sender = DiscordSender("https://discord.com/webhook", max_file_size_mb=1)
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.release = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.post = AsyncMock(return_value=mock_response)
+        mock_session.closed = False
+
+        media_items = [
+            {'data': b"x" * (2 * 1024 * 1024), 'type': 'photo', 'filename': 'large1.jpg'},
+            {'data': b"x" * (2 * 1024 * 1024), 'type': 'photo', 'filename': 'large2.jpg'},
+        ]
+
+        with patch('src.discord_client.get_shared_session', return_value=mock_session):
+            result = await sender.send_multiple_media("Text only", media_items)
+
+        assert result is True
+        # Should still send, with text only (all media skipped)
