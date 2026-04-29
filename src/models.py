@@ -69,6 +69,7 @@ class Settings(BaseModel):
     log_level: str = Field("INFO", description="Logging level")
     include_channel_name: bool = Field(True, description="Include channel name in forwarded message")
     include_timestamp: bool = Field(True, description="Include timestamp in forwarded message")
+    group_timeout_seconds: float = Field(3.0, description="Seconds to wait for album messages to arrive before forwarding")
 
     @field_validator('log_level')
     @classmethod

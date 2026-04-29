@@ -70,27 +70,37 @@ class TestCanCompress:
 class TestCompressImage:
     """Test compress_image method."""
     
+    @pytest.mark.asyncio
     async def test_no_compression_needed(self, skip_if_no_pil):
         img = Image.new('RGB', (100, 100), color='red')
         buffer = BytesIO()
         img.save(buffer, format='JPEG', quality=95)
         image_data = buffer.getvalue()
-        
+
         result = await MediaCompressor.compress_image(image_data, 10)  # 10MB limit
         assert result is None  # Already under limit
-    
-    async def test_compress_success(self, skip_if_no_pil):
-        # Create a large image (high quality)
-        img = Image.new('RGB', (1920, 1080), color='blue')
-        buffer = BytesIO()
-        img.save(buffer, format='JPEG', quality=95)
-        large_image_data = buffer.getvalue()
-        
-        with patch.object(MediaCompressor, 'can_compress', return_value=(True, "Image compression feasible")):
-            result = await MediaCompressor.compress_image(large_image_data, 0.5)  # 0.5MB limit
-        
+
+    @pytest.mark.asyncio
+    async def test_compress_success(self):
+        # Mock PIL so we control exact sizes: original=10MB, compressed=1MB → ratio 0.1 < 0.3 ✓
+        original_data = b"x" * (10 * 1024 * 1024)
+        compressed_data = b"y" * (1 * 1024 * 1024)
+
+        mock_img = Mock()
+        mock_img.mode = 'RGB'
+
+        def fake_save(buf, format, quality, optimize=False):
+            buf.write(compressed_data)
+
+        mock_img.save = fake_save
+
+        with patch.object(MediaCompressor, 'can_compress', return_value=(True, "feasible")), \
+             patch('src.media_compressor.Image') as mock_image_module:
+            mock_image_module.open.return_value = mock_img
+            result = await MediaCompressor.compress_image(original_data, 5)  # 5MB limit
+
         assert result is not None
-        assert len(result) < len(large_image_data)
+        assert result == compressed_data
     
     @pytest.mark.asyncio
     async def test_compress_cannot_compress(self):
@@ -98,15 +108,16 @@ class TestCompressImage:
             result = await MediaCompressor.compress_image(b"data", 1)
             assert result is None
     
+    @pytest.mark.asyncio
     async def test_compress_ratio_too_low(self, skip_if_no_pil):
         img = Image.new('RGB', (100, 100), color='green')
         buffer = BytesIO()
         img.save(buffer, format='JPEG', quality=10)  # Already low quality
         image_data = buffer.getvalue()
-        
+
         with patch.object(MediaCompressor, 'can_compress', return_value=(True, "Image compression feasible")):
             result = await MediaCompressor.compress_image(image_data, 100)  # Huge limit
-        
+
         # Should return None because compression ratio would be too low
         assert result is None
     
@@ -118,16 +129,21 @@ class TestCompressImage:
                 result = await MediaCompressor.compress_image(b"data", 1)
                 assert result is None
     
+    @pytest.mark.asyncio
     async def test_compress_rgba_image(self, skip_if_no_pil):
-        # Create RGBA image
-        img = Image.new('RGBA', (100, 100), color=(255, 0, 0, 128))
+        # Build a large noisy RGBA PNG as source so the JPEG output is well under 30% of it
+        import random
+        img = Image.new('RGBA', (500, 500))
+        pixels = [(random.randint(0, 255), random.randint(0, 255),
+                   random.randint(0, 255), 255) for _ in range(500 * 500)]
+        img.putdata(pixels)
         buffer = BytesIO()
         img.save(buffer, format='PNG')
         rgba_data = buffer.getvalue()
-        
+
         with patch.object(MediaCompressor, 'can_compress', return_value=(True, "Image compression feasible")):
-            result = await MediaCompressor.compress_image(rgba_data, 0.1)
-        
+            result = await MediaCompressor.compress_image(rgba_data, 10)  # generous limit
+
         assert result is not None
 
 

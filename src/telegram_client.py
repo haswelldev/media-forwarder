@@ -1,10 +1,14 @@
 """Telegram client for monitoring channels."""
 
+import asyncio
 import logging
 from typing import Optional
 from telethon import TelegramClient, events
 from telethon.tl.types import Channel, MessageMediaPhoto, MessageMediaDocument
 from .config import ConfigManager
+
+_CONNECT_TIMEOUT = 30   # seconds to wait for initial Telegram connection
+_ENTITY_TIMEOUT = 15    # seconds to wait for get_entity() per channel
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +31,9 @@ class TelegramMonitor:
                 self.config.telegram_api_hash
             )
             
-            # Connect to Telegram
-            await self.client.connect()
-            
+            # Connect to Telegram (with timeout so a network hang doesn't stall the container)
+            await asyncio.wait_for(self.client.connect(), timeout=_CONNECT_TIMEOUT)
+
             # Check if session is authorized
             if not await self.client.is_user_authorized():
                 raise Exception(
@@ -62,12 +66,14 @@ class TelegramMonitor:
                 if channel_id.lstrip('-').isdigit():
                     channel_id = int(channel_id)
 
-                # Fetch the full entity to ensure it's in Telethon's cache
-                await self.client.get_entity(channel_id)
+                # Fetch the full entity to ensure it's in Telethon's cache.
+                # Channel IDs in config should be @username or the full -100XXXXXXXXXX form.
+                # Bare positive integers are user IDs, not channel IDs, and will fail here.
+                await asyncio.wait_for(self.client.get_entity(channel_id), timeout=_ENTITY_TIMEOUT)
 
                 # Use the channel_id directly for event filtering.
-                # This matches the reference implementation which uses
-                # the IDs from config directly.
+                # Telethon's event.chat_id returns the full ID (with -100 prefix)
+                # for channels, so we need to match that format.
                 channels_to_monitor.append(channel_id)
 
                 logger.info(f'Added channel to monitoring: {channel_config.channel}')
@@ -121,6 +127,8 @@ class TelegramMonitor:
             if self.message_callback:
                 try:
                     await self.message_callback(message, event.chat)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f'Error in message callback: {e}', exc_info=True)
 
@@ -149,13 +157,17 @@ class TelegramMonitor:
             if from_chat_id is None:
                 return
 
-            # Check if from_chat matches any monitored channel
-            # monitored_channel_ids contains full IDs (e.g. -1001234567890)
-            # But event.chat_id might be bare (1234567890) or full
+            # Check if from_chat matches any monitored channel.
+            # Contract: monitored_channel_ids contains whatever was stored from config —
+            #   - str  "@username"
+            #   - int  full negative ID  (-1001234567890)
+            #   - int  bare positive ID  (1234567890)  — only if config had a bare number
+            # Forward.from_.id is always the bare positive channel ID (no -100 prefix).
             matched = False
             for monitored_id in self.monitored_channel_ids:
                 if isinstance(monitored_id, int) and monitored_id < 0:
-                    # Full channel ID (e.g. -1001234567890) -> bare ID
+                    # Full -100-prefixed ID → strip prefix to get bare ID for comparison.
+                    # abs(-1001234567890) - 1_000_000_000_000 == 1234567890
                     bare_monitored = abs(monitored_id) - 1000000000000
                     if from_chat_id == bare_monitored:
                         matched = True
@@ -181,6 +193,8 @@ class TelegramMonitor:
             if self.message_callback:
                 try:
                     await self.message_callback(message, from_chat)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f'Error in message callback: {e}', exc_info=True)
 

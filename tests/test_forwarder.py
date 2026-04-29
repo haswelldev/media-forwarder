@@ -23,7 +23,8 @@ def mock_config_manager():
         max_file_size_mb=10,
         include_channel_name=True,
         include_timestamp=True,
-        log_level="INFO"
+        log_level="INFO",
+        group_timeout_seconds=3.0,
     )
     return manager
 
@@ -55,23 +56,22 @@ def mock_message():
 @pytest.fixture
 def forwarder(mock_config_manager):
     with patch('src.forwarder.TelegramMonitor') as mock_tg_class, \
-         patch('src.forwarder.GoogleTranslator') as mock_translator_class, \
          patch('src.forwarder.MediaCompressor') as mock_compressor_class:
-        
+
         mock_tg = AsyncMock()
         mock_tg_class.return_value = mock_tg
-        
-        mock_translator = Mock()
-        mock_translator_class.return_value = mock_translator
-        
+
         mock_compressor = AsyncMock()
         mock_compressor_class.return_value = mock_compressor
-        
+
         fwd = MediaForwarder(mock_config_manager)
         fwd.telegram = mock_tg
-        fwd.translator = mock_translator
+        # Inject translator mock via the private backing attribute
+        mock_translator = Mock()
+        mock_translator.translate = Mock(return_value="translated")
+        fwd._translator = mock_translator
         fwd.compressor = mock_compressor
-        
+
         return fwd
 
 
@@ -80,23 +80,27 @@ class TestMediaForwarderInit:
     
     def test_init(self, mock_config_manager):
         with patch('src.forwarder.TelegramMonitor') as mock_tg, \
-             patch('src.forwarder.GoogleTranslator'), \
              patch('src.forwarder.MediaCompressor'):
-            
+
             fwd = MediaForwarder(mock_config_manager)
             assert fwd.config == mock_config_manager
             mock_tg.assert_called_once_with(mock_config_manager)
+            assert fwd._translator is None  # lazy — not created yet
+            assert fwd.group_timeout == 3.0
 
 
 class TestInitialize:
     """Test initialize method."""
-    
+
     @pytest.mark.asyncio
     async def test_initialize(self, forwarder):
         await forwarder.initialize()
         forwarder.telegram.initialize.assert_called_once()
         forwarder.telegram.set_message_callback.assert_called_once()
         assert forwarder.telegram.set_message_callback.call_args[0][0] == forwarder.handle_message
+        assert forwarder._cleanup_task is not None
+        # Clean up the background task so it doesn't linger
+        forwarder._cleanup_task.cancel()
 
 
 class TestGetChannelConfig:
@@ -410,7 +414,8 @@ class TestForwardToDestination:
     async def test_forward_media_compression_failed_with_text(self, forwarder):
         mock_chat = Mock(spec=Channel)
         mock_message = Mock(spec=Message)
-        
+        mock_message.id = 42
+
         large_data = b"x" * (20 * 1024 * 1024)
         
         forwarder.compressor.compress_media = AsyncMock(return_value=None)
@@ -455,8 +460,126 @@ class TestRunStop:
     @pytest.mark.asyncio
     async def test_stop(self, forwarder):
         forwarder.telegram.disconnect = AsyncMock()
-        
+
         with patch('src.discord_client.close_shared_session', new_callable=AsyncMock) as mock_close:
             await forwarder.stop()
             forwarder.telegram.disconnect.assert_called_once()
             mock_close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_calls_stop_on_exception(self, forwarder):
+        """try/finally in run() must call stop() even when telegram.run() raises."""
+        forwarder.telegram.run = AsyncMock(side_effect=RuntimeError("disconnected"))
+        forwarder.telegram.disconnect = AsyncMock()
+
+        with patch('src.discord_client.close_shared_session', new_callable=AsyncMock):
+            with pytest.raises(RuntimeError):
+                await forwarder.run()
+
+        forwarder.telegram.disconnect.assert_called_once()
+
+
+class TestGetChannelConfigBareId:
+    """Test _get_channel_config with bare numeric channel IDs (bug fix #4)."""
+
+    @pytest.mark.asyncio
+    async def test_get_config_by_bare_numeric_id(self):
+        """Config with bare numeric ID should match Telethon's chat.id."""
+        manager = Mock()
+        manager.config = Mock()
+        manager.config.channels = [
+            Mock(channel="1234567890", destinations=["discord_main"], settings=None)
+        ]
+        manager.config.discord_webhooks = {
+            "discord_main": Mock(url="https://discord.com/webhook", max_file_size_mb=10)
+        }
+        manager.config.settings = Mock(
+            max_file_size_mb=10,
+            include_channel_name=True,
+            include_timestamp=True,
+            group_timeout_seconds=3.0,
+        )
+
+        with patch('src.forwarder.TelegramMonitor'), \
+             patch('src.forwarder.MediaCompressor'):
+            fwd = MediaForwarder(manager)
+
+        channel = Mock()
+        channel.id = 1234567890
+        channel.username = None
+
+        config = fwd._get_channel_config(channel)
+        assert config is not None
+        assert config.channel == "1234567890"
+
+    @pytest.mark.asyncio
+    async def test_get_config_by_full_id(self):
+        """Config with -100-prefixed ID should match."""
+        manager = Mock()
+        manager.config = Mock()
+        manager.config.channels = [
+            Mock(channel="-1001234567890", destinations=["discord_main"], settings=None)
+        ]
+        manager.config.discord_webhooks = {}
+        manager.config.settings = Mock(
+            max_file_size_mb=10, include_channel_name=True, include_timestamp=True,
+            group_timeout_seconds=3.0
+        )
+
+        with patch('src.forwarder.TelegramMonitor'), \
+             patch('src.forwarder.MediaCompressor'):
+            fwd = MediaForwarder(manager)
+
+        channel = Mock()
+        channel.id = 1234567890  # Telethon's bare ID
+        channel.username = None
+
+        config = fwd._get_channel_config(channel)
+        assert config is not None
+        assert config.channel == "-1001234567890"
+
+
+class TestAlbumRaceCondition:
+    """Test album race condition sentinel (bug fix #3)."""
+
+    @pytest.mark.asyncio
+    async def test_late_message_after_processing_is_discarded(self, forwarder, mock_channel):
+        """A message arriving after _process_message_group pops the group gets discarded."""
+        grouped_id = 42
+        # Simulate the sentinel left by _process_message_group
+        forwarder.message_groups[grouped_id] = None
+
+        late_message = Mock()
+        late_message.id = 999
+        late_message.grouped_id = grouped_id
+
+        with patch.object(forwarder, '_forward_group_to_destination', new_callable=AsyncMock) as mock_fwd:
+            await forwarder._handle_grouped_message(late_message, mock_channel)
+            mock_fwd.assert_not_called()
+
+        # Sentinel should still be there (not replaced with a new group)
+        assert forwarder.message_groups[grouped_id] is None
+
+    @pytest.mark.asyncio
+    async def test_sentinel_cleared_after_processing(self, forwarder, mock_channel, mock_message):
+        """Sentinel is cleaned up after _process_message_group finishes."""
+        channel_config = Mock()
+        channel_config.channel = "@test_channel"
+        channel_config.destinations = ["discord_main"]
+        channel_config.settings = None
+        forwarder.config.config.channels = [channel_config]
+
+        grouped_id = 77
+        mock_message.grouped_id = grouped_id
+        mock_message.photo = None
+        mock_message.video = None
+        mock_message.document = None
+
+        # Manually set up the group as if messages arrived
+        forwarder.message_groups[grouped_id] = {'messages': [(mock_message, mock_channel)], 'timer_task': None}
+
+        with patch.object(forwarder, '_forward_group_to_destination', new_callable=AsyncMock):
+            await forwarder._process_message_group(grouped_id)
+
+        # Sentinel should be removed after processing
+        assert grouped_id not in forwarder.message_groups

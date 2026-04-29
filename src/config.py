@@ -19,7 +19,8 @@ class ConfigManager:
 
     def __init__(self, config_path: Optional[Path] = None):
         """Initialize configuration manager."""
-        self.config_path = config_path or self.DEFAULT_CONFIG_PATH
+        env_config = os.getenv('CONFIG_PATH')
+        self.config_path = config_path or (Path(env_config) if env_config else self.DEFAULT_CONFIG_PATH)
         self._config: Optional[Config] = None
 
     @property
@@ -47,10 +48,17 @@ class ConfigManager:
         return os.getenv('TELEGRAM_SESSION_NAME', 'media_forwarder')
 
     @property
+    def _session_dir(self) -> Path:
+        """Get session directory, respecting SESSION_DIR env var."""
+        env_dir = os.getenv('SESSION_DIR')
+        return Path(env_dir) if env_dir else self.DEFAULT_SESSION_DIR
+
+    @property
     def telegram_session_path(self) -> Path:
         """Get full path to Telegram session file."""
-        self.DEFAULT_SESSION_DIR.mkdir(parents=True, exist_ok=True)
-        return self.DEFAULT_SESSION_DIR / f'{self.telegram_session_name}.session'
+        session_dir = self._session_dir
+        session_dir.mkdir(parents=True, exist_ok=True)
+        return session_dir / f'{self.telegram_session_name}.session'
 
     @property
     def log_level(self) -> str:

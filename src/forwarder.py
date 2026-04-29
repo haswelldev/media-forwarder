@@ -2,10 +2,10 @@
 
 import logging
 from datetime import datetime
-from typing import List, Optional, Tuple
+import time
+from typing import Dict, List, Optional, Tuple
 import asyncio
 from telethon.tl.types import Channel, Message, MessageMediaPhoto
-from deep_translator import GoogleTranslator
 from src.config import ConfigManager
 from src.telegram_client import TelegramMonitor
 from src.discord_client import DiscordSender
@@ -21,18 +21,36 @@ class MediaForwarder:
         """Initialize media forwarder."""
         self.config = config_manager
         self.telegram = TelegramMonitor(config_manager)
-        self.translator = GoogleTranslator(source='auto', target='en')
+        self._translator = None  # lazy-init on first use
         self.compressor = MediaCompressor()
         self.message_groups = {}
-        self.group_timeout = 3.0
+        self.group_timeout = config_manager.config.settings.group_timeout_seconds
+        self.metrics = {
+            'messages_received': 0,
+            'messages_forwarded': 0,
+            'messages_skipped': 0,
+            'compression_attempts': 0,
+            'compression_success': 0,
+            'discord_retries': 0,
+        }
+        self._cleanup_task: Optional[asyncio.Task] = None
+
+    @property
+    def translator(self):
+        if self._translator is None:
+            from deep_translator import GoogleTranslator
+            self._translator = GoogleTranslator(source='auto', target='en')
+        return self._translator
 
     async def initialize(self):
         """Initialize forwarder."""
         await self.telegram.initialize()
         self.telegram.set_message_callback(self.handle_message)
+        self._cleanup_task = asyncio.create_task(self._cleanup_stale_groups())
 
     async def handle_message(self, message: Message, chat: Channel):
         """Handle incoming Telegram message."""
+        self.metrics['messages_received'] += 1
         # Check if message is part of a group (album)
         grouped_id = getattr(message, 'grouped_id', None)
         if grouped_id:
@@ -47,8 +65,15 @@ class MediaForwarder:
         if grouped_id not in self.message_groups:
             self.message_groups[grouped_id] = {
                 'messages': [],
-                'timer_task': None
+                'timer_task': None,
+                'created_at': time.monotonic(),
             }
+        elif self.message_groups[grouped_id] is None:
+            # Group is already being processed — late arrival, log and discard
+            logger.warning(
+                f'Late message {message.id} for group {grouped_id} arrived after processing started; skipping'
+            )
+            return
 
         group = self.message_groups[grouped_id]
         group['messages'].append((message, chat))
@@ -72,6 +97,15 @@ class MediaForwarder:
             return
 
         group = self.message_groups.pop(grouped_id)
+        # Sentinel so late-arriving messages can detect the group is processing
+        self.message_groups[grouped_id] = None
+        try:
+            await self._process_message_group_inner(grouped_id, group)
+        finally:
+            self.message_groups.pop(grouped_id, None)
+
+    async def _process_message_group_inner(self, grouped_id, group):
+        """Inner logic for _process_message_group, called with sentinel already set."""
         messages_and_chats = group['messages']
 
         if not messages_and_chats:
@@ -289,57 +323,49 @@ class MediaForwarder:
 
             # Process media if present
             final_media_data = media_data
-            skip_message = False
+            skip_reason: Optional[str] = None
 
             if has_media and media_data:
-                # Check if compression is needed and try to compress
                 file_size_mb = len(media_data) / (1024 * 1024)
-
-                # Log file size for debugging
                 logger.debug(f"Media file {filename}: {file_size_mb:.2f}MB, type: {media_type}")
 
-                # Check if media data seems valid (not too small for the type)
-                if file_size_mb < 0.01:  # Less than 10KB is suspicious
+                if file_size_mb < 0.01:
                     logger.warning(f"Downloaded media {filename} is too small ({file_size_mb:.2f}MB), skipping")
                     final_media_data = None
-                    skip_message = True
+                    skip_reason = f'media too small ({file_size_mb:.2f}MB)'
                 elif file_size_mb > max_file_size:
                     logger.info(
                         f'Media too large ({file_size_mb:.2f}MB > {max_file_size}MB), '
                         f'attempting compression for {destination_name}'
                     )
-
+                    self.metrics['compression_attempts'] += 1
                     compressed_data = await self.compressor.compress_media(
                         media_data, media_type, max_file_size, filename
                     )
 
                     if compressed_data:
                         final_media_data = compressed_data
+                        self.metrics['compression_success'] += 1
                         logger.info(
                             f'Successfully compressed media for {destination_name}: '
                             f'{file_size_mb:.2f}MB -> {len(compressed_data)/(1024*1024):.2f}MB'
                         )
                     else:
                         logger.warning(
-                            f'Could not compress media for {destination_name}, '
-                            f'skipping this media'
+                            f'Could not compress media for {destination_name}, skipping media'
                         )
-                        # Don't send if we can't include media and there's no caption
                         if not text:
-                            logger.info(
-                                f'Skipping message {message.id} - no media (compression failed) and no caption'
-                            )
-                            skip_message = True
+                            skip_reason = 'compression failed, no caption fallback'
                         else:
-                            # If there's text, we'll send text only
+                            logger.info(f'Sending text-only fallback for message {message.id} (compression failed)')
                             final_media_data = None
 
-            # Skip if there's nothing to send
-            if skip_message or (not final_media_data and not formatted_text):
-                logger.info(f'Skipping message {message.id} - no content to send')
+            if skip_reason or (not final_media_data and not formatted_text):
+                reason_str = f' (reason: {skip_reason})' if skip_reason else ''
+                logger.info(f'Skipping message {message.id} to {destination_name}{reason_str}')
+                self.metrics['messages_skipped'] += 1
                 return
 
-            # Send based on media type
             if media_type == 'photo' and final_media_data:
                 success = await sender.send_photo(formatted_text, final_media_data)
             elif media_type == 'video' and final_media_data:
@@ -347,10 +373,10 @@ class MediaForwarder:
             elif media_type == 'document' and final_media_data:
                 success = await sender.send_document(formatted_text, final_media_data, filename)
             elif formatted_text:
-                # Only send text if there's text content
                 success = await sender.send_message(formatted_text)
 
             if success:
+                self.metrics['messages_forwarded'] += 1
                 logger.info(
                     f'Forwarded message {message.id} from {chat.username or chat.id} '
                     f'to {destination_name}'
@@ -360,6 +386,8 @@ class MediaForwarder:
                     f'Failed to forward message {message.id} to {destination_name}'
                 )
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(
                 f'Error forwarding to {destination_name}: {e}',
@@ -404,7 +432,7 @@ class MediaForwarder:
 
             # Process each media item
             final_media_items = []
-            skip_message = False
+            failed_compression = 0
 
             for item in media_items:
                 media_data = item['data']
@@ -414,12 +442,9 @@ class MediaForwarder:
                 if not media_data:
                     continue
 
-                # Check if compression is needed
                 file_size_mb = len(media_data) / (1024 * 1024)
-
                 logger.debug(f"Media file {filename}: {file_size_mb:.2f}MB, type: {media_type}")
 
-                # Check if media data seems valid
                 if file_size_mb < 0.01:
                     logger.warning(f"Downloaded media {filename} is too small ({file_size_mb:.2f}MB), skipping")
                     continue
@@ -428,7 +453,7 @@ class MediaForwarder:
                         f'Media too large ({file_size_mb:.2f}MB > {max_file_size}MB), '
                         f'attempting compression for {destination_name}'
                     )
-
+                    self.metrics['compression_attempts'] += 1
                     compressed_data = await self.compressor.compress_media(
                         media_data, media_type, max_file_size, filename
                     )
@@ -439,15 +464,16 @@ class MediaForwarder:
                             'type': media_type,
                             'filename': filename
                         })
+                        self.metrics['compression_success'] += 1
                         logger.info(
                             f'Successfully compressed media for {destination_name}: '
                             f'{file_size_mb:.2f}MB -> {len(compressed_data)/(1024*1024):.2f}MB'
                         )
                     else:
+                        failed_compression += 1
                         logger.warning(
-                            f'Could not compress media {filename} for {destination_name}, skipping this media'
+                            f'Could not compress media {filename} for {destination_name}, skipping this item'
                         )
-                        # Continue with other media items
                 else:
                     final_media_items.append({
                         'data': media_data,
@@ -455,15 +481,22 @@ class MediaForwarder:
                         'filename': filename
                     })
 
-            # Skip if there's nothing to send
             if not final_media_items and not formatted_text:
-                logger.info(f'Skipping group message - no content to send')
+                reason = 'all media failed compression, no caption' if failed_compression else 'no media or text'
+                logger.info(f'Skipping group message to {destination_name} (reason: {reason})')
+                self.metrics['messages_skipped'] += 1
                 return
 
-            # Send all media in one message
+            if not final_media_items and formatted_text:
+                logger.info(
+                    f'Sending text-only fallback for group to {destination_name} '
+                    f'({failed_compression} item(s) failed compression)'
+                )
+
             success = await sender.send_multiple_media(formatted_text, final_media_items)
 
             if success:
+                self.metrics['messages_forwarded'] += 1
                 logger.info(
                     f'Forwarded grouped message from {chat.username or chat.id} '
                     f'with {len(final_media_items)} media items to {destination_name}'
@@ -473,11 +506,34 @@ class MediaForwarder:
                     f'Failed to forward grouped message to {destination_name}'
                 )
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(
                 f'Error forwarding group to {destination_name}: {e}',
                 exc_info=True
             )
+
+    async def _cleanup_stale_groups(self):
+        """Background task: evict message_groups entries that were never processed."""
+        sweep_interval = max(self.group_timeout * 3, 10.0)
+        stale_threshold = self.group_timeout * 10  # 30s at default timeout
+        while True:
+            try:
+                await asyncio.sleep(sweep_interval)
+                now = time.monotonic()
+                stale = [
+                    gid for gid, entry in list(self.message_groups.items())
+                    if entry is not None and now - entry.get('created_at', now) > stale_threshold
+                    and (entry['timer_task'] is None or entry['timer_task'].done())
+                ]
+                for gid in stale:
+                    logger.warning(f'Evicting stale message group {gid} (never processed)')
+                    self.message_groups.pop(gid, None)
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error(f'Error in group cleanup sweep: {e}')
 
     async def _translate_text(self, text: str) -> str:
         """Translate text to English."""
@@ -490,19 +546,18 @@ class MediaForwarder:
 
     def _get_channel_config(self, chat: Channel):
         """Get channel configuration for a chat."""
-        # Try multiple identifiers: username, then numeric ID
+        # Try multiple identifiers: username, then numeric ID forms
         possible_identifiers = []
-        
+
         if chat.username:
             possible_identifiers.append(f'@{chat.username}')
-        
-        # For channels, construct the full channel ID
-        # The full Telegram channel ID format is -100XXXXXXXXXX
-        # Telethon's chat.id for channels is the numeric part (XXXXXXXXXX)
-        # We need to prepend -100 to match the configuration format
+
+        # Telethon's chat.id is the bare numeric part (e.g. 1234567890).
+        # Config may store the full -100-prefixed ID or the bare integer string.
         bare_id = chat.id
         possible_identifiers.append(f'-100{bare_id}')
-        
+        possible_identifiers.append(str(bare_id))
+
         logger.debug(f'Looking for config with identifiers: {possible_identifiers}')
         
         for channel_config in self.config.config.channels:
@@ -547,13 +602,17 @@ class MediaForwarder:
     async def run(self):
         """Run the forwarder."""
         logger.info('Starting media forwarder')
-        await self.telegram.run()
+        try:
+            await self.telegram.run()
+        finally:
+            await self.stop()
 
     async def stop(self):
         """Stop the forwarder."""
         logger.info('Stopping media forwarder')
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
         await self.telegram.disconnect()
-        # Close shared aiohttp session
         from src.discord_client import close_shared_session
         await close_shared_session()
         logger.info('Discord session closed')
