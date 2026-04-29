@@ -62,15 +62,15 @@ class TelegramMonitor:
                 if channel_id.lstrip('-').isdigit():
                     channel_id = int(channel_id)
 
-                # Fetch the full entity to ensure it's in Telethon's cache.
-                # Telethon needs entities in its cache for event filtering to work.
-                entity = await self.client.get_entity(channel_id)
+                # Fetch the full entity to ensure it's in Telethon's cache
+                await self.client.get_entity(channel_id)
 
-                # Use the entity's id for event filtering
-                entity_id = entity.id
-                channels_to_monitor.append(entity_id)
+                # Use the channel_id directly for event filtering.
+                # This matches the reference implementation which uses
+                # the IDs from config directly.
+                channels_to_monitor.append(channel_id)
 
-                logger.info(f'Added channel to monitoring: {channel_config.channel} (entity_id={entity_id})')
+                logger.info(f'Added channel to monitoring: {channel_config.channel}')
             except Exception as e:
                 logger.warning(
                     f'Cannot access channel {channel_config.channel}: {e}. '
@@ -149,7 +149,28 @@ class TelegramMonitor:
             if from_chat_id is None:
                 return
 
-            if from_chat_id not in self.monitored_channel_ids:
+            # Check if from_chat matches any monitored channel
+            # monitored_channel_ids contains full IDs (e.g. -1001234567890)
+            # But event.chat_id might be bare (1234567890) or full
+            matched = False
+            for monitored_id in self.monitored_channel_ids:
+                if isinstance(monitored_id, int) and monitored_id < 0:
+                    # Full channel ID (e.g. -1001234567890) -> bare ID
+                    bare_monitored = abs(monitored_id) - 1000000000000
+                    if from_chat_id == bare_monitored:
+                        matched = True
+                        break
+                elif isinstance(monitored_id, int):
+                    if from_chat_id == monitored_id:
+                        matched = True
+                        break
+                elif isinstance(monitored_id, str):
+                    from_chat_username = getattr(from_chat, 'username', None)
+                    if from_chat_username and f'@{from_chat_username}' == monitored_id:
+                        matched = True
+                        break
+
+            if not matched:
                 return
 
             logger.info(

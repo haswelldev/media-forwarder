@@ -198,7 +198,7 @@ class TestTelegramMonitor:
             monitor = TelegramMonitor(mock_config_manager)
             monitor.client = mock_client
             await monitor.start_monitoring()
-            assert monitor.monitored_channel_ids == {100, 200}
+            assert monitor.monitored_channel_ids == {"@ch1", "@ch2"}
 
     @pytest.mark.asyncio
     async def test_start_monitoring_entity_id_extraction_failure(self, mock_config_manager):
@@ -209,8 +209,7 @@ class TestTelegramMonitor:
         with patch('src.telegram_client.TelegramClient') as mock_client_class:
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            bad_entity = Mock(spec=[])
-            mock_client.get_entity = AsyncMock(return_value=bad_entity)
+            mock_client.get_entity = AsyncMock(side_effect=ValueError("Cannot find entity"))
             mock_client.on = lambda event: (lambda f: f)
 
             monitor = TelegramMonitor(mock_config_manager)
@@ -293,7 +292,7 @@ class TestTelegramMonitor:
 def monitor_with_handlers(mock_config_manager):
     monitor = TelegramMonitor(mock_config_manager)
     monitor.client = AsyncMock()
-    monitor.monitored_channel_ids = {1234567890}
+    monitor.monitored_channel_ids = {-1001234567890}
     return monitor
 
 
