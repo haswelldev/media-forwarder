@@ -7,11 +7,12 @@ from src.telegram_client import TelegramMonitor
 from src.config import ConfigManager
 
 
-def _make_input_peer_channel(channel_id):
-    """Create a mock InputPeerChannel with channel_id attribute."""
-    entity = Mock()
-    entity.channel_id = channel_id
-    entity.id = None
+def _make_channel_entity(channel_id):
+    """Create a mock Channel entity with id attribute."""
+    entity = Mock(spec=Channel)
+    entity.id = channel_id
+    entity.title = f"Channel {channel_id}"
+    entity.username = None
     return entity
 
 
@@ -103,8 +104,8 @@ class TestTelegramMonitor:
         with patch('src.telegram_client.TelegramClient') as mock_client_class:
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            mock_client.get_input_entity = AsyncMock(
-                return_value=_make_input_peer_channel(1234567890)
+            mock_client.get_entity = AsyncMock(
+                return_value=_make_channel_entity(1234567890)
             )
 
             mock_client.on = lambda event: (lambda f: f)
@@ -112,7 +113,7 @@ class TestTelegramMonitor:
             monitor = TelegramMonitor(mock_config_manager)
             monitor.client = mock_client
             await monitor.start_monitoring()
-            mock_client.get_input_entity.assert_called_once_with("@test_channel")
+            mock_client.get_entity.assert_called_once_with("@test_channel")
 
     @pytest.mark.asyncio
     async def test_start_monitoring_with_numeric_channel_id(self, mock_config_manager):
@@ -123,15 +124,15 @@ class TestTelegramMonitor:
         with patch('src.telegram_client.TelegramClient') as mock_client_class:
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            mock_client.get_input_entity = AsyncMock(
-                return_value=_make_input_peer_channel(1234567890)
+            mock_client.get_entity = AsyncMock(
+                return_value=_make_channel_entity(1234567890)
             )
             mock_client.on = lambda event: (lambda f: f)
 
             monitor = TelegramMonitor(mock_config_manager)
             monitor.client = mock_client
             await monitor.start_monitoring()
-            mock_client.get_input_entity.assert_called_once_with(-1001234567890)
+            mock_client.get_entity.assert_called_once_with(-1001234567890)
 
     @pytest.mark.asyncio
     async def test_start_monitoring_with_inaccessible_channel(self, mock_config_manager):
@@ -146,16 +147,16 @@ class TestTelegramMonitor:
 
             async def get_entity_side_effect(channel):
                 if channel == "@accessible_channel":
-                    return _make_input_peer_channel(111)
+                    return _make_channel_entity(111)
                 raise ValueError(f"Cannot find entity for {channel}")
 
-            mock_client.get_input_entity = AsyncMock(side_effect=get_entity_side_effect)
+            mock_client.get_entity = AsyncMock(side_effect=get_entity_side_effect)
             mock_client.on = lambda event: (lambda f: f)
 
             monitor = TelegramMonitor(mock_config_manager)
             monitor.client = mock_client
             await monitor.start_monitoring()
-            assert mock_client.get_input_entity.call_count == 2
+            assert mock_client.get_entity.call_count == 2
 
     @pytest.mark.asyncio
     async def test_start_monitoring_all_inaccessible(self, mock_config_manager):
@@ -166,7 +167,7 @@ class TestTelegramMonitor:
         with patch('src.telegram_client.TelegramClient') as mock_client_class:
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            mock_client.get_input_entity = AsyncMock(
+            mock_client.get_entity = AsyncMock(
                 side_effect=ValueError("Cannot find entity")
             )
 
@@ -189,15 +190,15 @@ class TestTelegramMonitor:
             call_count = [0]
             async def get_entity_side_effect(channel):
                 call_count[0] += 1
-                return _make_input_peer_channel(call_count[0] * 100)
+                return _make_channel_entity(call_count[0] * 100)
 
-            mock_client.get_input_entity = AsyncMock(side_effect=get_entity_side_effect)
+            mock_client.get_entity = AsyncMock(side_effect=get_entity_side_effect)
             mock_client.on = lambda event: (lambda f: f)
 
             monitor = TelegramMonitor(mock_config_manager)
             monitor.client = mock_client
             await monitor.start_monitoring()
-            assert monitor.monitored_channel_ids == {"@ch1", "@ch2"}
+            assert monitor.monitored_channel_ids == {100, 200}
 
     @pytest.mark.asyncio
     async def test_start_monitoring_entity_id_extraction_failure(self, mock_config_manager):
@@ -209,14 +210,13 @@ class TestTelegramMonitor:
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
             bad_entity = Mock(spec=[])
-            mock_client.get_input_entity = AsyncMock(return_value=bad_entity)
+            mock_client.get_entity = AsyncMock(return_value=bad_entity)
             mock_client.on = lambda event: (lambda f: f)
 
             monitor = TelegramMonitor(mock_config_manager)
             monitor.client = mock_client
             await monitor.start_monitoring()
-            # Channel is still added even with a bad entity since we use channel_id directly
-            assert "@bad_channel" in monitor.monitored_channel_ids
+            assert not hasattr(monitor, 'monitored_channel_ids') or not monitor.monitored_channel_ids
 
     @pytest.mark.asyncio
     async def test_start_monitoring_no_client(self, mock_config_manager):
@@ -293,7 +293,7 @@ class TestTelegramMonitor:
 def monitor_with_handlers(mock_config_manager):
     monitor = TelegramMonitor(mock_config_manager)
     monitor.client = AsyncMock()
-    monitor.monitored_channel_ids = {1234567890, -1001234567890}
+    monitor.monitored_channel_ids = {1234567890}
     return monitor
 
 
@@ -308,8 +308,8 @@ def _setup_handlers(monitor):
         return decorator
 
     monitor.client.on = capture_handler
-    mock_entity = _make_input_peer_channel(1234567890)
-    monitor.client.get_input_entity = AsyncMock(return_value=mock_entity)
+    mock_entity = _make_channel_entity(1234567890)
+    monitor.client.get_entity = AsyncMock(return_value=mock_entity)
     monitor.config.config.channels = [Mock(channel="-1001234567890", destinations=["d"])]
 
     return handlers
