@@ -1,5 +1,6 @@
 """Media compression utilities."""
 
+import asyncio
 import logging
 import subprocess
 from io import BytesIO
@@ -73,7 +74,7 @@ class MediaCompressor:
         Returns:
             Compressed image data, or None if compression not feasible
         """
-        can_compress, reason = MediaCompressor.can_compress(media_data, max_size_mb)
+        can_compress, reason = await asyncio.to_thread(MediaCompressor.can_compress, media_data, max_size_mb)
         if not can_compress:
             logger.debug(f"Cannot compress {filename}: {reason}")
             return None
@@ -153,7 +154,7 @@ class MediaCompressor:
         
         # Check if ffmpeg is available
         try:
-            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+            await asyncio.to_thread(subprocess.run, ['ffmpeg', '-version'], capture_output=True, check=True)
         except (subprocess.CalledProcessError, FileNotFoundError):
             logger.debug("ffmpeg not available for video compression")
             return None
@@ -208,26 +209,27 @@ class MediaCompressor:
                 )
                 
                 logger.debug(f"Starting ffmpeg compression for {filename}")
-                
-                # Build ffmpeg command using temp files instead of pipe
-                # This allows ffmpeg to seek and properly analyze the video
+
                 try:
-                    out, err = (
-                        ffmpeg
-                        .input(temp_input_path, analyzeduration='20000000', probesize='100000000')
-                        .output(
-                            temp_output_path,
-                            vcodec='libx264',
-                            acodec='aac',
-                            video_bitrate=f'{target_bitrate}',
-                            audio_bitrate='128k',
-                            preset='medium',
-                            movflags='faststart',
-                            fflags='+genpts+discardcorrupt'  # Generate PTS and discard corrupt packets
+                    def _run_ffmpeg():
+                        return (
+                            ffmpeg
+                            .input(temp_input_path, analyzeduration='20000000', probesize='100000000')
+                            .output(
+                                temp_output_path,
+                                vcodec='libx264',
+                                acodec='aac',
+                                video_bitrate=f'{target_bitrate}',
+                                audio_bitrate='128k',
+                                preset='medium',
+                                movflags='faststart',
+                                fflags='+genpts+discardcorrupt'
+                            )
+                            .overwrite_output()
+                            .run(capture_stdout=True, capture_stderr=True)
                         )
-                        .overwrite_output()
-                        .run(capture_stdout=True, capture_stderr=True)
-                    )
+
+                    out, err = await asyncio.to_thread(_run_ffmpeg)
                     
                     logger.debug(f"ffmpeg compression completed for {filename}")
                     
@@ -285,7 +287,7 @@ class MediaCompressor:
     @staticmethod
     async def _get_video_duration(media_data: bytes) -> Optional[float]:
         """Get video duration using ffprobe via pipe."""
-        try:
+        def _probe():
             import json
             result = subprocess.run(
                 [
@@ -301,10 +303,12 @@ class MediaCompressor:
                 timeout=60
             )
             if result.returncode != 0:
-                logger.debug(f"ffprobe failed: {result.stderr.decode('utf-8', errors='ignore')}")
                 return None
             probe = json.loads(result.stdout)
-            duration = float(probe['format']['duration'])
+            return float(probe['format']['duration'])
+
+        try:
+            duration = await asyncio.to_thread(_probe)
             return duration
         except subprocess.TimeoutExpired:
             logger.debug("ffprobe timeout while getting video duration")
@@ -312,11 +316,11 @@ class MediaCompressor:
         except Exception as e:
             logger.debug(f"Error getting video duration: {e}")
             return None
-    
+
     @staticmethod
     async def _validate_video(media_data: bytes, filename: str) -> bool:
         """Validate that the video data is complete and readable."""
-        try:
+        def _probe():
             result = subprocess.run(
                 [
                     'ffprobe', '-v', 'error',
@@ -334,6 +338,9 @@ class MediaCompressor:
                 logger.debug(f"Video validation failed for {filename}: {result.stderr.decode('utf-8', errors='ignore')}")
                 return False
             return True
+
+        try:
+            return await asyncio.to_thread(_probe)
         except subprocess.TimeoutExpired:
             logger.debug(f"Video validation timeout for {filename}")
             return False

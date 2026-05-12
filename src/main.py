@@ -53,13 +53,15 @@ async def login_command(config_manager: ConfigManager):
 
 async def run_command(config_manager: ConfigManager):
     """Run the media forwarder."""
+    forwarder = None
     try:
         forwarder = MediaForwarder(config_manager)
         await forwarder.initialize()
         await forwarder.run()
     except KeyboardInterrupt:
         print('\nReceived interrupt signal, shutting down...')
-        await forwarder.stop()
+        if forwarder:
+            await forwarder.stop()
     except Exception as e:
         logging.error(f'Fatal error: {e}', exc_info=True)
         sys.exit(1)

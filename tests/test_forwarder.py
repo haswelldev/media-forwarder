@@ -353,63 +353,61 @@ class TestForwardToDestination:
     async def test_forward_text_only(self, forwarder):
         mock_chat = Mock(spec=Channel)
         mock_message = Mock(spec=Message)
-        
+
         with patch('src.forwarder.DiscordSender') as mock_sender_class:
             mock_sender = AsyncMock()
             mock_sender.send_message = AsyncMock(return_value=True)
             mock_sender_class.return_value = mock_sender
-            
+
             await forwarder._forward_to_destination(
                 mock_message, mock_chat, "discord_main",
-                "Hello", "Formatted: Hello", None, None, "file", False, None
+                "Hello", "Formatted: Hello", None, None, None, "file", False, None
             )
-            
+
             mock_sender.send_message.assert_called_once_with("Formatted: Hello")
-    
+
     @pytest.mark.asyncio
     async def test_forward_photo(self, forwarder):
         mock_chat = Mock(spec=Channel)
         mock_message = Mock(spec=Message)
         mock_message.id = 1
-        
+
         with patch('src.forwarder.DiscordSender') as mock_sender_class:
             mock_sender = AsyncMock()
             mock_sender.send_photo = AsyncMock(return_value=True)
             mock_sender_class.return_value = mock_sender
-            
-            # Use larger data that passes the size validation (>0.01MB)
-            photo_data = b"x" * (20 * 1024)  # 20KB
-            
+
+            photo_data = b"x" * (20 * 1024)
+
             await forwarder._forward_to_destination(
                 mock_message, mock_chat, "discord_main",
-                "Caption", "Formatted: Caption", photo_data, "photo", "photo.jpg", True, None
+                "Caption", "Formatted: Caption", photo_data, None, "photo", "photo.jpg", True, None
             )
-            
-            mock_sender.send_photo.assert_called_once_with("Formatted: Caption", photo_data)
-    
+
+            mock_sender.send_photo.assert_called_once_with("Formatted: Caption", photo_data, "photo.jpg")
+
     @pytest.mark.asyncio
     async def test_forward_media_too_large_with_compression(self, forwarder):
         mock_chat = Mock(spec=Channel)
         mock_message = Mock(spec=Message)
-        
-        # Media larger than max_file_size
-        large_data = b"x" * (20 * 1024 * 1024)  # 20MB
-        
+
+        large_data = b"x" * (20 * 1024 * 1024)
+
         forwarder.compressor.compress_media = AsyncMock(return_value=b"compressed_data")
-        
+
         with patch('src.forwarder.DiscordSender') as mock_sender_class:
             mock_sender = AsyncMock()
             mock_sender.send_video = AsyncMock(return_value=True)
             mock_sender_class.return_value = mock_sender
-            
+
             await forwarder._forward_to_destination(
                 mock_message, mock_chat, "discord_main",
-                "Video", "Formatted: Video", large_data, "video", "video.mp4", True, None
+                "Video", "Formatted: Video", large_data, None, "video", "video.mp4", True, None
             )
-            
+
             forwarder.compressor.compress_media.assert_called_once()
             mock_sender.send_video.assert_called_once()
-    
+
     @pytest.mark.asyncio
     async def test_forward_media_compression_failed_with_text(self, forwarder):
         mock_chat = Mock(spec=Channel)
@@ -417,33 +415,31 @@ class TestForwardToDestination:
         mock_message.id = 42
 
         large_data = b"x" * (20 * 1024 * 1024)
-        
+
         forwarder.compressor.compress_media = AsyncMock(return_value=None)
-        
+
         with patch('src.forwarder.DiscordSender') as mock_sender_class:
             mock_sender = AsyncMock()
             mock_sender.send_message = AsyncMock(return_value=True)
             mock_sender_class.return_value = mock_sender
-            
+
             await forwarder._forward_to_destination(
                 mock_message, mock_chat, "discord_main",
-                "Text only", "Formatted: Text only", large_data, "video", "video.mp4", True, None
+                "Text only", "Formatted: Text only", large_data, None, "video", "video.mp4", True, None
             )
-            
-            # Should send text only
+
             mock_sender.send_message.assert_called_once_with("Formatted: Text only")
-    
+
     @pytest.mark.asyncio
     async def test_forward_destination_not_found(self, forwarder):
         forwarder.config.config.discord_webhooks = {}
-        
+
         mock_chat = Mock(spec=Channel)
         mock_message = Mock(spec=Message)
-        
-        # Should return early without error
+
         await forwarder._forward_to_destination(
             mock_message, mock_chat, "nonexistent",
-            "Hello", "Formatted: Hello", None, None, "file", False, None
+            "Hello", "Formatted: Hello", None, None, None, "file", False, None
         )
 
 

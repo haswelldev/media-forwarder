@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
 _RETRY_STATUSES = {500, 502, 503, 504}
+_DISCORD_MAX_ATTACHMENTS = 10
+_DISCORD_CONTENT_LIMIT = 2000
 
 # Global shared session
 _shared_session: Optional[aiohttp.ClientSession] = None
@@ -18,7 +20,7 @@ async def get_shared_session() -> aiohttp.ClientSession:
     """Get or create shared aiohttp session."""
     global _shared_session
     if _shared_session is None or _shared_session.closed:
-        _shared_session = aiohttp.ClientSession()
+        _shared_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120))
     return _shared_session
 
 
@@ -95,7 +97,6 @@ class DiscordSender:
                     f'File too large: {len(media_data) / (1024 * 1024):.2f}MB '
                     f'(max: {self.max_file_size_mb}MB), skipping'
                 )
-                # Send text only if available; report success iff text was delivered
                 if text:
                     def text_only_data():
                         d = aiohttp.FormData()
@@ -133,13 +134,65 @@ class DiscordSender:
             logger.error(f'Failed to send to Discord: {e}', exc_info=True)
             return False
 
+    async def send_file(
+        self,
+        text: Optional[str],
+        file_path: str,
+        filename: str = 'file'
+    ) -> bool:
+        """Send a file from disk to Discord, streaming without loading entirely into memory."""
+        try:
+            import os
+            file_size = os.path.getsize(file_path)
+            file_size_mb = file_size / (1024 * 1024)
+
+            if file_size > self.max_file_size_bytes:
+                logger.warning(
+                    f'File too large: {file_size_mb:.2f}MB '
+                    f'(max: {self.max_file_size_mb}MB), skipping'
+                )
+                if text:
+                    def text_only_data():
+                        d = aiohttp.FormData()
+                        d.add_field('content', text)
+                        return d
+                    success = await self._post_with_retry(text_only_data)
+                    if success:
+                        logger.info('Sent text-only fallback (media exceeded size limit)')
+                    return success
+                return False
+
+            logger.info(f'Sending file: {filename} ({file_size_mb:.2f}MB)')
+
+            def build_data():
+                d = aiohttp.FormData()
+                if text:
+                    d.add_field('content', text)
+                d.add_field(
+                    'file',
+                    open(file_path, 'rb'),
+                    filename=filename,
+                    content_type='application/octet-stream'
+                )
+                return d
+
+            success = await self._post_with_retry(build_data)
+            if success:
+                logger.info('File sent to Discord successfully')
+            return success
+
+        except Exception as e:
+            logger.error(f'Failed to send file to Discord: {e}', exc_info=True)
+            return False
+
     async def send_photo(
         self,
         text: Optional[str],
-        photo_data: bytes
+        photo_data: bytes,
+        filename: str = 'photo.jpg'
     ) -> bool:
         """Send photo to Discord."""
-        return await self.send_message(text, photo_data, 'photo.jpg')
+        return await self.send_message(text, photo_data, filename)
 
     async def send_video(
         self,
@@ -166,16 +219,33 @@ class DiscordSender:
     ) -> bool:
         """Send multiple media files in one message to Discord."""
         try:
-            # Filter oversized items up front
             valid_items = []
             for item in media_items:
-                if len(item['data']) > self.max_file_size_bytes:
-                    logger.warning(
-                        f'File too large: {len(item["data"]) / (1024 * 1024):.2f}MB '
-                        f'(max: {self.max_file_size_mb}MB), skipping {item["filename"]}'
-                    )
+                file_path = item.get('file_path')
+                if file_path:
+                    import os
+                    if os.path.getsize(file_path) > self.max_file_size_bytes:
+                        logger.warning(
+                            f'File too large: {os.path.getsize(file_path) / (1024 * 1024):.2f}MB '
+                            f'(max: {self.max_file_size_mb}MB), skipping {item["filename"]}'
+                        )
+                    else:
+                        valid_items.append(item)
                 else:
-                    valid_items.append(item)
+                    data = item.get('data')
+                    if data and len(data) > self.max_file_size_bytes:
+                        logger.warning(
+                            f'File too large: {len(data) / (1024 * 1024):.2f}MB '
+                            f'(max: {self.max_file_size_mb}MB), skipping {item["filename"]}'
+                        )
+                    elif data:
+                        valid_items.append(item)
+
+            if len(valid_items) > _DISCORD_MAX_ATTACHMENTS:
+                logger.warning(
+                    f'Album has {len(valid_items)} items, capping at {_DISCORD_MAX_ATTACHMENTS} (Discord limit)'
+                )
+                valid_items = valid_items[:_DISCORD_MAX_ATTACHMENTS]
 
             if not valid_items and not text:
                 logger.warning('No content to send')
@@ -186,12 +256,22 @@ class DiscordSender:
                 if text:
                     d.add_field('content', text)
                 for idx, item in enumerate(valid_items):
-                    d.add_field(
-                        f'file{idx}' if idx > 0 else 'file',
-                        item['data'],
-                        filename=item['filename'],
-                        content_type='application/octet-stream'
-                    )
+                    field_name = f'file{idx}' if idx > 0 else 'file'
+                    file_path = item.get('file_path')
+                    if file_path:
+                        d.add_field(
+                            field_name,
+                            open(file_path, 'rb'),
+                            filename=item['filename'],
+                            content_type='application/octet-stream'
+                        )
+                    else:
+                        d.add_field(
+                            field_name,
+                            item['data'],
+                            filename=item['filename'],
+                            content_type='application/octet-stream'
+                        )
                 return d
 
             success = await self._post_with_retry(build_data)

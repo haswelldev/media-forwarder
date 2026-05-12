@@ -1,6 +1,7 @@
 """Main forwarding logic."""
 
 import logging
+import os
 from datetime import datetime
 import time
 from typing import Dict, List, Optional, Tuple
@@ -113,10 +114,8 @@ class MediaForwarder:
 
         logger.info(f'Processing group {grouped_id} with {len(messages_and_chats)} messages')
 
-        # Use the first message for channel config and text (caption is on first message)
         first_message, chat = messages_and_chats[0]
 
-        # Find channel configuration
         channel_config = self._get_channel_config(chat)
         if not channel_config:
             if chat.username:
@@ -128,84 +127,108 @@ class MediaForwarder:
 
         channel_settings = channel_config.settings
 
-        # Extract text from first message (caption)
         text = first_message.text or first_message.message
 
-        # Collect all media from the group
         media_items = []
-        for msg, _ in messages_and_chats:
-            media_data = None
-            media_type = None
-            filename = 'file'
+        temp_paths = []
+        try:
+            for msg, _ in messages_and_chats:
+                media_data = None
+                temp_path = None
+                media_type = None
+                filename = 'file'
 
-            if msg.photo:
-                media_data = await self.telegram.download_media(msg)
-                media_type = 'photo'
-                filename = f'photo_{msg.id}.jpg'
-            elif msg.video:
-                media_data = await self.telegram.download_media(msg)
-                media_type = 'video'
-                if msg.video.attributes:
-                    for attr in msg.video.attributes:
-                        if hasattr(attr, 'file_name') and attr.file_name:
-                            filename = attr.file_name
-                            break
-                if filename == 'file':
-                    filename = f'video_{msg.id}.mp4'
-            elif msg.document:
-                media_data = await self.telegram.download_media(msg)
-                media_type = 'document'
-                if msg.document.attributes:
-                    for attr in msg.document.attributes:
-                        if hasattr(attr, 'file_name') and attr.file_name:
-                            filename = attr.file_name
-                            break
-                if filename == 'file':
-                    filename = f'document_{msg.id}'
+                if msg.photo:
+                    media_data, temp_path = await self._download_media(msg)
+                    media_type = 'photo'
+                    filename = f'photo_{msg.id}.jpg'
+                elif msg.video:
+                    media_data, temp_path = await self._download_media(msg)
+                    media_type = 'video'
+                    if msg.video.attributes:
+                        for attr in msg.video.attributes:
+                            if hasattr(attr, 'file_name') and attr.file_name:
+                                filename = attr.file_name
+                                break
+                    if filename == 'file':
+                        filename = f'video_{msg.id}.mp4'
+                elif msg.document:
+                    media_data, temp_path = await self._download_media(msg)
+                    media_type = 'document'
+                    if msg.document.attributes:
+                        for attr in msg.document.attributes:
+                            if hasattr(attr, 'file_name') and attr.file_name:
+                                filename = attr.file_name
+                                break
+                    if filename == 'file':
+                        filename = f'document_{msg.id}'
 
-            if media_data:
-                media_items.append({
-                    'data': media_data,
-                    'type': media_type,
-                    'filename': filename
-                })
+                if temp_path:
+                    temp_paths.append(temp_path)
+                    file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+                    media_items.append({
+                        'file_path': temp_path,
+                        'type': media_type,
+                        'filename': filename,
+                        'size_mb': file_size_mb,
+                    })
+                elif media_data:
+                    media_items.append({
+                        'data': media_data,
+                        'type': media_type,
+                        'filename': filename,
+                    })
 
-        if not media_items:
-            logger.debug(f'No media found in group {grouped_id}, skipping')
-            return
+            if not media_items:
+                logger.debug(f'No media found in group {grouped_id}, skipping')
+                return
 
-        # Check media-only filter
-        if channel_settings and channel_settings.media_only:
-            # We have media, so continue
-            pass
+            if channel_settings and channel_settings.media_only:
+                pass
 
-        # Remove captions if configured
-        if channel_settings and channel_settings.remove_captions:
-            text = None
-            logger.debug(f'Removed caption from group {grouped_id}')
+            if channel_settings and channel_settings.remove_captions:
+                text = None
+                logger.debug(f'Removed caption from group {grouped_id}')
 
-        # Translate captions if configured
-        if text and channel_settings and channel_settings.translate_captions:
-            text = await self._translate_text(text)
-            if text:
-                logger.debug(f'Translated caption for group {grouped_id}')
+            if text and channel_settings and channel_settings.translate_captions:
+                text = await self._translate_text(text)
+                if text:
+                    logger.debug(f'Translated caption for group {grouped_id}')
 
-        # Format message text
-        formatted_text = self._format_message(text, chat, first_message, channel_settings)
+            formatted_text = self._format_message(text, chat, first_message, channel_settings)
 
-        # Forward to each destination
-        for destination_name in channel_config.destinations:
-            await self._forward_group_to_destination(
-                first_message, chat, destination_name,
-                text, formatted_text, media_items, channel_settings
-            )
+            for destination_name in channel_config.destinations:
+                await self._forward_group_to_destination(
+                    first_message, chat, destination_name,
+                    text, formatted_text, media_items, channel_settings
+                )
+        finally:
+            for tp in temp_paths:
+                try:
+                    os.unlink(tp)
+                except OSError:
+                    pass
+
+    async def _download_media(self, msg) -> Tuple[Optional[bytes], Optional[str]]:
+        """Download media, returning (data, temp_file_path).
+
+        Returns (bytes, None) for small files or (None, path) for large files.
+        Caller must delete temp_file_path when done.
+        """
+        data = await self.telegram.download_media(msg)
+        if data is not None:
+            return data, None
+
+        temp_path = await self.telegram.download_media_to_file(msg)
+        if temp_path is not None:
+            return None, temp_path
+
+        return None, None
 
     async def _handle_single_message(self, message: Message, chat: Channel):
         """Handle a single (non-grouped) message."""
-        # Find channel configuration
         channel_config = self._get_channel_config(chat)
         if not channel_config:
-            # Get the channel identifier for logging
             if chat.username:
                 channel_id = f'@{chat.username}'
             else:
@@ -213,26 +236,23 @@ class MediaForwarder:
             logger.warning(f'No configuration found for channel: {channel_id}')
             return
 
-        # Get channel-specific settings (if any)
         channel_settings = channel_config.settings
 
-        # Extract message content
         text = message.text or message.message
         media_data = None
+        temp_file_path = None
         media_type = None
         filename = 'file'
         has_media = False
 
-        # Handle photo
         if message.photo:
-            media_data = await self.telegram.download_media(message)
+            media_data, temp_file_path = await self._download_media(message)
             media_type = 'photo'
             filename = f'photo_{message.id}.jpg'
             has_media = True
 
-        # Handle video
         elif message.video:
-            media_data = await self.telegram.download_media(message)
+            media_data, temp_file_path = await self._download_media(message)
             media_type = 'video'
             if message.video.attributes:
                 for attr in message.video.attributes:
@@ -243,9 +263,8 @@ class MediaForwarder:
                 filename = f'video_{message.id}.mp4'
             has_media = True
 
-        # Handle document
         elif message.document:
-            media_data = await self.telegram.download_media(message)
+            media_data, temp_file_path = await self._download_media(message)
             media_type = 'document'
             if message.document.attributes:
                 for attr in message.document.attributes:
@@ -256,31 +275,34 @@ class MediaForwarder:
                 filename = f'document_{message.id}'
             has_media = True
 
-        # Check media-only filter
         if channel_settings and channel_settings.media_only and not has_media:
             logger.debug(f'Skipping text-only message {message.id} (media_only=True)')
             return
 
-        # Remove captions if configured
         if channel_settings and channel_settings.remove_captions and has_media:
             text = None
             logger.debug(f'Removed caption from message {message.id}')
 
-        # Translate captions if configured
         if text and channel_settings and channel_settings.translate_captions:
             text = await self._translate_text(text)
             if text:
                 logger.debug(f'Translated caption for message {message.id}')
 
-        # Format message text
         formatted_text = self._format_message(text, chat, message, channel_settings)
 
-        # Forward to each destination
-        for destination_name in channel_config.destinations:
-            await self._forward_to_destination(
-                message, chat, destination_name,
-                text, formatted_text, media_data, media_type, filename, has_media, channel_settings
-            )
+        try:
+            for destination_name in channel_config.destinations:
+                await self._forward_to_destination(
+                    message, chat, destination_name,
+                    text, formatted_text, media_data, temp_file_path, media_type,
+                    filename, has_media, channel_settings
+                )
+        finally:
+            if temp_file_path:
+                try:
+                    os.unlink(temp_file_path)
+                except OSError:
+                    pass
 
     async def _forward_to_destination(
         self,
@@ -289,7 +311,8 @@ class MediaForwarder:
         destination_name: str,
         text: str,
         formatted_text: str,
-        media_data: bytes,
+        media_data: Optional[bytes],
+        temp_file_path: Optional[str],
         media_type: str,
         filename: str,
         has_media: bool,
@@ -297,13 +320,11 @@ class MediaForwarder:
     ):
         """Forward message to a specific destination."""
         try:
-            # Get destination config
             webhook_config = self.config.config.discord_webhooks.get(destination_name)
             if not webhook_config:
                 logger.error(f'Destination config not found: {destination_name}')
                 return
 
-            # Handle both dict and object formats for webhook_config
             if isinstance(webhook_config, dict):
                 webhook_url = webhook_config['url']
                 max_file_size = webhook_config.get('max_file_size_mb')
@@ -311,9 +332,8 @@ class MediaForwarder:
                 webhook_url = webhook_config.url
                 max_file_size = webhook_config.max_file_size_mb
 
-            # Determine max file size (destination > channel > global)
             if max_file_size:
-                pass  # Use destination size
+                pass
             elif channel_settings and channel_settings.max_file_size_mb:
                 max_file_size = channel_settings.max_file_size_mb
             else:
@@ -321,17 +341,21 @@ class MediaForwarder:
 
             sender = DiscordSender(webhook_url, max_file_size)
 
-            # Process media if present
             final_media_data = media_data
+            final_temp_path = temp_file_path
             skip_reason: Optional[str] = None
 
-            if has_media and media_data:
-                file_size_mb = len(media_data) / (1024 * 1024)
+            if has_media and (media_data or temp_file_path):
+                if temp_file_path:
+                    file_size_mb = os.path.getsize(temp_file_path) / (1024 * 1024)
+                else:
+                    file_size_mb = len(media_data) / (1024 * 1024)
                 logger.debug(f"Media file {filename}: {file_size_mb:.2f}MB, type: {media_type}")
 
                 if file_size_mb < 0.01:
                     logger.warning(f"Downloaded media {filename} is too small ({file_size_mb:.2f}MB), skipping")
                     final_media_data = None
+                    final_temp_path = None
                     skip_reason = f'media too small ({file_size_mb:.2f}MB)'
                 elif file_size_mb > max_file_size:
                     logger.info(
@@ -339,12 +363,21 @@ class MediaForwarder:
                         f'attempting compression for {destination_name}'
                     )
                     self.metrics['compression_attempts'] += 1
-                    compressed_data = await self.compressor.compress_media(
-                        media_data, media_type, max_file_size, filename
-                    )
+
+                    if final_temp_path:
+                        with open(final_temp_path, 'rb') as f:
+                            raw_data = f.read()
+                        compressed_data = await self.compressor.compress_media(
+                            raw_data, media_type, max_file_size, filename
+                        )
+                    else:
+                        compressed_data = await self.compressor.compress_media(
+                            media_data, media_type, max_file_size, filename
+                        )
 
                     if compressed_data:
                         final_media_data = compressed_data
+                        final_temp_path = None
                         self.metrics['compression_success'] += 1
                         logger.info(
                             f'Successfully compressed media for {destination_name}: '
@@ -359,21 +392,27 @@ class MediaForwarder:
                         else:
                             logger.info(f'Sending text-only fallback for message {message.id} (compression failed)')
                             final_media_data = None
+                            final_temp_path = None
 
-            if skip_reason or (not final_media_data and not formatted_text):
+            if skip_reason or (not final_media_data and not final_temp_path and not formatted_text):
                 reason_str = f' (reason: {skip_reason})' if skip_reason else ''
                 logger.info(f'Skipping message {message.id} to {destination_name}{reason_str}')
                 self.metrics['messages_skipped'] += 1
                 return
 
-            if media_type == 'photo' and final_media_data:
-                success = await sender.send_photo(formatted_text, final_media_data)
+            send_text = self._truncate_for_discord(formatted_text)
+            success = False
+
+            if final_temp_path:
+                success = await sender.send_file(send_text, final_temp_path, filename)
+            elif media_type == 'photo' and final_media_data:
+                success = await sender.send_photo(send_text, final_media_data, filename)
             elif media_type == 'video' and final_media_data:
-                success = await sender.send_video(formatted_text, final_media_data, filename)
+                success = await sender.send_video(send_text, final_media_data, filename)
             elif media_type == 'document' and final_media_data:
-                success = await sender.send_document(formatted_text, final_media_data, filename)
-            elif formatted_text:
-                success = await sender.send_message(formatted_text)
+                success = await sender.send_document(send_text, final_media_data, filename)
+            elif send_text:
+                success = await sender.send_message(send_text)
 
             if success:
                 self.metrics['messages_forwarded'] += 1
@@ -406,13 +445,11 @@ class MediaForwarder:
     ):
         """Forward grouped messages (album) to a specific destination."""
         try:
-            # Get destination config
             webhook_config = self.config.config.discord_webhooks.get(destination_name)
             if not webhook_config:
                 logger.error(f'Destination config not found: {destination_name}')
                 return
 
-            # Handle both dict and object formats for webhook_config
             if isinstance(webhook_config, dict):
                 webhook_url = webhook_config['url']
                 max_file_size = webhook_config.get('max_file_size_mb')
@@ -420,9 +457,8 @@ class MediaForwarder:
                 webhook_url = webhook_config.url
                 max_file_size = webhook_config.max_file_size_mb
 
-            # Determine max file size (destination > channel > global)
             if max_file_size:
-                pass  # Use destination size
+                pass
             elif channel_settings and channel_settings.max_file_size_mb:
                 max_file_size = channel_settings.max_file_size_mb
             else:
@@ -430,19 +466,22 @@ class MediaForwarder:
 
             sender = DiscordSender(webhook_url, max_file_size)
 
-            # Process each media item
             final_media_items = []
             failed_compression = 0
 
             for item in media_items:
-                media_data = item['data']
+                file_path = item.get('file_path')
+                if file_path:
+                    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                else:
+                    media_data = item['data']
+                    if not media_data:
+                        continue
+                    file_size_mb = len(media_data) / (1024 * 1024)
+
                 media_type = item['type']
                 filename = item['filename']
 
-                if not media_data:
-                    continue
-
-                file_size_mb = len(media_data) / (1024 * 1024)
                 logger.debug(f"Media file {filename}: {file_size_mb:.2f}MB, type: {media_type}")
 
                 if file_size_mb < 0.01:
@@ -454,8 +493,15 @@ class MediaForwarder:
                         f'attempting compression for {destination_name}'
                     )
                     self.metrics['compression_attempts'] += 1
+
+                    if file_path:
+                        with open(file_path, 'rb') as f:
+                            raw_data = f.read()
+                    else:
+                        raw_data = media_data
+
                     compressed_data = await self.compressor.compress_media(
-                        media_data, media_type, max_file_size, filename
+                        raw_data, media_type, max_file_size, filename
                     )
 
                     if compressed_data:
@@ -475,11 +521,18 @@ class MediaForwarder:
                             f'Could not compress media {filename} for {destination_name}, skipping this item'
                         )
                 else:
-                    final_media_items.append({
-                        'data': media_data,
-                        'type': media_type,
-                        'filename': filename
-                    })
+                    if file_path:
+                        final_media_items.append({
+                            'file_path': file_path,
+                            'type': media_type,
+                            'filename': filename,
+                        })
+                    else:
+                        final_media_items.append({
+                            'data': item['data'],
+                            'type': media_type,
+                            'filename': filename
+                        })
 
             if not final_media_items and not formatted_text:
                 reason = 'all media failed compression, no caption' if failed_compression else 'no media or text'
@@ -493,7 +546,8 @@ class MediaForwarder:
                     f'({failed_compression} item(s) failed compression)'
                 )
 
-            success = await sender.send_multiple_media(formatted_text, final_media_items)
+            send_text = self._truncate_for_discord(formatted_text)
+            success = await sender.send_multiple_media(send_text, final_media_items)
 
             if success:
                 self.metrics['messages_forwarded'] += 1
@@ -538,11 +592,20 @@ class MediaForwarder:
     async def _translate_text(self, text: str) -> str:
         """Translate text to English."""
         try:
-            translated = self.translator.translate(text)
+            translated = await asyncio.to_thread(self.translator.translate, text)
             return translated
         except Exception as e:
             logger.warning(f'Translation failed: {e}')
-            return text  # Return original text if translation fails
+            return text
+
+    @staticmethod
+    def _truncate_for_discord(text: str, limit: int = 2000) -> str:
+        """Truncate text to fit within Discord's content length limit."""
+        if not text or len(text) <= limit:
+            return text
+        truncated = text[:limit - 3] + '...'
+        logger.debug(f'Truncated message from {len(text)} to {limit} chars for Discord')
+        return truncated
 
     def _get_channel_config(self, chat: Channel):
         """Get channel configuration for a chat."""

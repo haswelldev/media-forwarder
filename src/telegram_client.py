@@ -2,13 +2,16 @@
 
 import asyncio
 import logging
-from typing import Optional
+import os
+import tempfile
+from typing import Optional, Union
 from telethon import TelegramClient, events
 from telethon.tl.types import Channel, MessageMediaPhoto, MessageMediaDocument
 from .config import ConfigManager
 
-_CONNECT_TIMEOUT = 30   # seconds to wait for initial Telegram connection
-_ENTITY_TIMEOUT = 15    # seconds to wait for get_entity() per channel
+_CONNECT_TIMEOUT = 30
+_ENTITY_TIMEOUT = 15
+_IN_MEMORY_LIMIT = 50 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -216,14 +219,60 @@ class TelegramMonitor:
             logger.info('Telegram client disconnected')
 
     async def download_media(self, message) -> Optional[bytes]:
-        """Download media from message to bytes."""
+        """Download media from message to bytes.
+
+        For files larger than _IN_MEMORY_LIMIT, returns None and logs a warning.
+        Use download_media_to_file for large files.
+        """
         if not message.media:
             return None
-        
+
         try:
+            size = getattr(getattr(message, 'media', None), 'filesize', None)
+            if isinstance(size, (int, float)) and size > _IN_MEMORY_LIMIT:
+                logger.info(
+                    f'Media too large for in-memory download ({size / (1024*1024):.1f}MB), '
+                    f'use download_media_to_file instead'
+                )
+                return None
+
             data = await message.download_media(file=bytes)
-            logger.debug(f'Downloaded {len(data)} bytes of media')
+            if data:
+                logger.debug(f'Downloaded {len(data)} bytes of media')
             return data
         except Exception as e:
             logger.error(f'Failed to download media: {e}')
+            return None
+
+    async def download_media_to_file(self, message) -> Optional[str]:
+        """Download media from message to a temporary file.
+
+        Returns the path to the temporary file, or None on failure.
+        The caller is responsible for deleting the file when done.
+        """
+        if not message.media:
+            return None
+
+        try:
+            suffix = '.bin'
+            if hasattr(message, 'video') and message.video:
+                suffix = '.mp4'
+            elif hasattr(message, 'photo') and message.photo:
+                suffix = '.jpg'
+
+            fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix='tg_media_')
+            os.close(fd)
+
+            result = await message.download_media(file=temp_path)
+            if result:
+                file_size = os.path.getsize(temp_path)
+                logger.debug(f'Downloaded media to temp file: {temp_path} ({file_size} bytes)')
+                return temp_path
+            else:
+                os.unlink(temp_path)
+                return None
+        except Exception as e:
+            logger.error(f'Failed to download media to file: {e}')
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                os.unlink(temp_path)
             return None
