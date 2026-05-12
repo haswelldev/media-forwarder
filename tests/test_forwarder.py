@@ -178,12 +178,148 @@ class TestTranslateText:
     """Test _translate_text method."""
     
     @pytest.mark.asyncio
-    async def test_translate_success(self, forwarder):
+    async def test_translate_failure(self, forwarder):
         forwarder.translator.translate.return_value = "Hola mundo"
-        
+
         result = await forwarder._translate_text("Hello world")
-        assert result == "Hola mundo"
+        assert result == "Hello world"
         forwarder.translator.translate.assert_called_once_with("Hello world")
+
+    class TestTruncateForDiscord:
+        """Test _truncate_for_discord static method."""
+
+        def test_at_limit(self):
+            text = "A" * 2000
+            result = MediaForwarder._truncate_for_discord(text, limit=2000)
+            assert result == text
+            assert len(result) == 2000
+
+        def test_over_limit(self):
+            text = "B" * 2000
+            result = MediaForwarder._truncate_for_discord(text, limit=1000)
+            expected = "B" * 997 + "..."
+            assert result == expected
+            assert len(result) == 1000
+
+        def test_empty_string(self):
+            result = MediaForwarder._truncate_for_discord("", limit=2000)
+            assert result == ""
+            assert len(result) == 0
+
+        def test_none_input(self):
+            result = MediaForwarder._truncate_for_discord(None, limit=2000)
+            assert result is None
+
+    class TestDownloadMedia:
+        """Test _download_media helper method."""
+
+        @pytest.mark.asyncio
+        async def test_small_file_returns_bytes(self, forwarder):
+            """Small files should be downloaded to bytes, not temp file."""
+            forwarder.telegram.download_media = AsyncMock(return_value=b"small_data")
+            forwarder.telegram.download_media_to_file = AsyncMock(return_value=None)
+
+            data, temp_path = await forwarder._download_media(Mock())
+            assert data == b"small_data"
+            assert temp_path is None
+
+        @pytest.mark.asyncio
+        async def test_large_file_returns_temp_path(self, forwarder):
+            """Large files (>50MB) should use temp file, not bytes."""
+            forwarder.telegram.download_media = AsyncMock(return_value=None)
+
+            temp_path = "/tmp/test_media_123.bin"
+            forwarder.telegram.download_media_to_file = AsyncMock(return_value=temp_path)
+
+            data, path = await forwarder._download_media(Mock())
+            assert data is None
+            assert path == temp_path
+
+        @pytest.mark.asyncio
+        async def test_download_returns_none_on_both_fail(self, forwarder):
+            """If both downloads fail, should return (None, None)."""
+            forwarder.telegram.download_media = AsyncMock(return_value=None)
+            forwarder.telegram.download_media_to_file = AsyncMock(return_value=None)
+
+            data, path = await forwarder._download_media(Mock())
+            assert data is None
+            assert path is None
+
+    class TestDiscordClientSendFile:
+        """Test DiscordSender.send_file method for streaming large files."""
+
+        @pytest.mark.asyncio
+        async def test_send_file_success(self):
+            """Successfully send file from disk."""
+            import tempfile
+            from src.discord_client import DiscordSender
+
+            mock_session = Mock()
+            mock_response = Mock()
+            mock_response.status = 200
+            mock_cm = MagicMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_cm.__aexit__ = AsyncMock(return_value=False)
+            mock_session.post = Mock(return_value=mock_cm)
+            mock_session.closed = False
+
+            with patch('src.discord_client.get_shared_session', return_value=mock_session):
+                sender = DiscordSender("https://discord.com/webhook", max_file_size_mb=10)
+
+                with tempfile.NamedTemporaryFile(delete=False) as temp_f:
+                    temp_f.write(b"test data")
+                    temp_f.flush()
+                    result = await sender.send_file("text", temp_f.name, "test.bin")
+
+            assert result is True
+
+        @pytest.mark.asyncio
+        async def test_send_file_too_large_with_text_fallback(self):
+            """File too large should send text-only fallback."""
+            import tempfile
+            from src.discord_client import DiscordSender
+
+            mock_session = Mock()
+            mock_response = Mock()
+            mock_response.status = 200
+            mock_cm = MagicMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_cm.__aexit__ = AsyncMock(return_value=False)
+            mock_session.post = Mock(return_value=mock_cm)
+            mock_session.closed = False
+
+            with patch('src.discord_client.get_shared_session', return_value=mock_session):
+                sender = DiscordSender("https://discord.com/webhook", max_file_size_mb=1)
+
+                large_file = tempfile.NamedTemporaryFile(delete=False)
+                large_file.write(b"x" * (2 * 1024 * 1024))
+                large_file.flush()
+
+                result = await sender.send_file("fallback text", large_file.name, "large.bin")
+
+            assert result is True
+            mock_session.post.assert_called_once()
+
+        @pytest.mark.asyncio
+        async def test_send_file_too_large_no_text(self):
+            """File too large with no text should return False."""
+            import tempfile
+            from src.discord_client import DiscordSender
+
+            mock_session = Mock()
+            mock_session.closed = False
+
+            with patch('src.discord_client.get_shared_session', return_value=mock_session):
+                sender = DiscordSender("https://discord.com/webhook", max_file_size_mb=1)
+
+                large_file = tempfile.NamedTemporaryFile(delete=False)
+                large_file.write(b"x" * (2 * 1024 * 1024))
+                large_file.flush()
+
+                result = await sender.send_file(None, large_file.name, "large.bin")
+
+            assert result is False
+            mock_session.post.assert_not_called()
     
     @pytest.mark.asyncio
     async def test_translate_failure(self, forwarder):
