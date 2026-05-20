@@ -22,11 +22,11 @@ def setup_logging(level: str):
 async def login_command(config_manager: ConfigManager):
     """Perform interactive login to Telegram."""
     from telethon import TelegramClient
+    from telethon.errors import FloodWaitError, SessionPasswordNeededError
     
     print('Starting interactive Telegram login...')
     print(f'Session file: {config_manager.telegram_session_path}')
     
-    # Create client
     client = TelegramClient(
         str(config_manager.telegram_session_path),
         config_manager.telegram_api_id,
@@ -34,10 +34,66 @@ async def login_command(config_manager: ConfigManager):
     )
     
     try:
-        # Start client (will prompt for phone number and code)
-        await client.start()
+        await client.connect()
         
-        # Get user info
+        if await client.is_user_authorized():
+            me = await client.get_me()
+            print(f'\nAlready logged in as: {me.first_name} (@{me.username})')
+            print(f'User ID: {me.id}')
+            await client.disconnect()
+            return
+        
+        phone = input('Enter your phone number (with country code, e.g. +1234567890): ')
+        print(f'Sending code to {phone}...')
+        
+        try:
+            sent = await client.send_code_request(phone)
+        except FloodWaitError as e:
+            print(f'\nToo many login attempts. Please wait {e.seconds} seconds and try again.')
+            await client.disconnect()
+            sys.exit(1)
+        
+        code_type = type(sent.type).__name__ if sent.type else 'unknown'
+        delivery_hint = {
+            'SentCodeTypeApp': 'Telegram app (check your chat with "Telegram" for a message with the code)',
+            'SentCodeTypeSms': 'SMS (check your text messages)',
+            'SentCodeTypeCall': 'phone call (you will receive an automated call)',
+            'SentCodeTypeFlashCall': 'flash call (you will receive a brief phone call)',
+        }.get(code_type, f'{code_type} (check Telegram app and SMS)')
+        
+        print(f'Code sent via {delivery_hint}')
+        
+        if hasattr(sent, 'next_type') and sent.next_type:
+            next_type = type(sent.next_type).__name__ if sent.next_type else None
+            if next_type == 'SentCodeTypeSms':
+                print('If you did not receive the code, you can request it via SMS by pressing Enter without entering a code.')
+        
+        code = input('Enter the code you received: ')
+        
+        if not code.strip():
+            print('Requesting code via SMS...')
+            try:
+                sent = await client.send_code_request(phone, force_sms=True)
+                code_type = type(sent.type).__name__ if sent.type else 'unknown'
+                delivery_hint = {
+                    'SentCodeTypeApp': 'Telegram app',
+                    'SentCodeTypeSms': 'SMS (check your text messages)',
+                    'SentCodeTypeCall': 'phone call',
+                    'SentCodeTypeFlashCall': 'flash call',
+                }.get(code_type, f'{code_type}')
+                print(f'Code sent via {delivery_hint}')
+                code = input('Enter the code you received: ')
+            except FloodWaitError as e:
+                print(f'\nToo many login attempts. Please wait {e.seconds} seconds and try again.')
+                await client.disconnect()
+                sys.exit(1)
+        
+        try:
+            await client.sign_in(phone, code, phone_code_hash=sent.phone_code_hash)
+        except SessionPasswordNeededError:
+            password = input('Your account has 2FA enabled. Enter your password: ')
+            await client.sign_in(password=password)
+        
         me = await client.get_me()
         print(f'\nSuccessfully logged in as: {me.first_name} (@{me.username})')
         print(f'User ID: {me.id}')
