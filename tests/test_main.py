@@ -33,6 +33,15 @@ class TestSetupLogging:
 
 class TestLoginCommand:
 
+    def _make_mock_sent(self, code_type_name='SentCodeTypeApp'):
+        mock_type = Mock()
+        type(mock_type).__name__ = code_type_name
+        mock_sent = Mock()
+        mock_sent.type = mock_type
+        mock_sent.phone_code_hash = 'hash123'
+        mock_sent.next_type = None
+        return mock_sent
+
     @pytest.mark.asyncio
     async def test_login_command_success(self):
         from src.main import login_command
@@ -47,16 +56,79 @@ class TestLoginCommand:
         mock_me.username = "testuser"
         mock_me.id = 12345
 
+        mock_sent = self._make_mock_sent()
+
         mock_client = AsyncMock()
-        mock_client.start = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.is_user_authorized = AsyncMock(return_value=False)
+        mock_client.send_code_request = AsyncMock(return_value=mock_sent)
+        mock_client.sign_in = AsyncMock()
+        mock_client.get_me = AsyncMock(return_value=mock_me)
+        mock_client.disconnect = AsyncMock()
+
+        with patch('telethon.TelegramClient', return_value=mock_client), \
+             patch('builtins.input', side_effect=['+1234567890', '12345']):
+            await login_command(mock_config)
+            mock_client.connect.assert_called_once()
+            mock_client.send_code_request.assert_called_once_with('+1234567890')
+            mock_client.sign_in.assert_called_once_with('+1234567890', '12345', phone_code_hash='hash123')
+            mock_client.get_me.assert_called_once()
+            mock_client.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_login_command_already_authorized(self):
+        from src.main import login_command
+
+        mock_config = Mock()
+        mock_config.telegram_session_path = Path("/tmp/test.session")
+        mock_config.telegram_api_id = 123
+        mock_config.telegram_api_hash = "hash"
+
+        mock_me = Mock()
+        mock_me.first_name = "Test User"
+        mock_me.username = "testuser"
+        mock_me.id = 12345
+
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.is_user_authorized = AsyncMock(return_value=True)
         mock_client.get_me = AsyncMock(return_value=mock_me)
         mock_client.disconnect = AsyncMock()
 
         with patch('telethon.TelegramClient', return_value=mock_client):
             await login_command(mock_config)
-            mock_client.start.assert_called_once()
-            mock_client.get_me.assert_called_once()
+            mock_client.send_code_request.assert_not_called()
             mock_client.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_login_command_2fa(self):
+        from src.main import login_command
+        from telethon.errors import SessionPasswordNeededError
+
+        mock_config = Mock()
+        mock_config.telegram_session_path = Path("/tmp/test.session")
+        mock_config.telegram_api_id = 123
+        mock_config.telegram_api_hash = "hash"
+
+        mock_me = Mock()
+        mock_me.first_name = "Test User"
+        mock_me.username = "testuser"
+        mock_me.id = 12345
+
+        mock_sent = self._make_mock_sent()
+
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.is_user_authorized = AsyncMock(return_value=False)
+        mock_client.send_code_request = AsyncMock(return_value=mock_sent)
+        mock_client.sign_in = AsyncMock(side_effect=[SessionPasswordNeededError(None), None])
+        mock_client.get_me = AsyncMock(return_value=mock_me)
+        mock_client.disconnect = AsyncMock()
+
+        with patch('telethon.TelegramClient', return_value=mock_client), \
+             patch('builtins.input', side_effect=['+1234567890', '12345', 'mypassword']):
+            await login_command(mock_config)
+            assert mock_client.sign_in.call_count == 2
 
     @pytest.mark.asyncio
     async def test_login_command_failure(self):
@@ -68,9 +140,31 @@ class TestLoginCommand:
         mock_config.telegram_api_hash = "hash"
 
         mock_client = AsyncMock()
-        mock_client.start = AsyncMock(side_effect=Exception("Login failed"))
+        mock_client.connect = AsyncMock(side_effect=Exception("Login failed"))
 
         with patch('telethon.TelegramClient', return_value=mock_client):
+            with pytest.raises(SystemExit) as exc_info:
+                await login_command(mock_config)
+            assert exc_info.value.code == 1
+
+    @pytest.mark.asyncio
+    async def test_login_command_flood_wait(self):
+        from src.main import login_command
+        from telethon.errors import FloodWaitError
+
+        mock_config = Mock()
+        mock_config.telegram_session_path = Path("/tmp/test.session")
+        mock_config.telegram_api_id = 123
+        mock_config.telegram_api_hash = "hash"
+
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.is_user_authorized = AsyncMock(return_value=False)
+        mock_client.send_code_request = AsyncMock(side_effect=FloodWaitError(request=None, capture=0))
+        mock_client.disconnect = AsyncMock()
+
+        with patch('telethon.TelegramClient', return_value=mock_client), \
+             patch('builtins.input', return_value='+1234567890'):
             with pytest.raises(SystemExit) as exc_info:
                 await login_command(mock_config)
             assert exc_info.value.code == 1
